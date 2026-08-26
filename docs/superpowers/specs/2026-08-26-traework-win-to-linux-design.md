@@ -166,6 +166,39 @@ Recommends: ffmpeg
 - **应用图标**: 从 `TRAE SOLO CN.exe` 的 PE 资源中提取（RT_GROUP_ICON, 256x256 PNG），已提取为 `trae-icon-256.png`
 - **innoextract**: 从源码编译（apt 版本 1.9 不支持 Inno Setup 6.4.0.1），源码: github.com/dscharrer/innoextract
 
+## DLL 恢复策略（优先处理）
+
+### 可直接恢复的公共 npm 包
+
+这些包在公共 npm registry 上有 Linux 版本，构建时直接安装/编译：
+
+| 包名 | 恢复方式 | 恢复功能 |
+|------|---------|----------|
+| `@parcel/watcher-linux-x64-glibc` | `npm install` Linux 版 | 文件监听 |
+| `@byted-fe/ripgrep-linux-x64` | `npm install` Linux 版 | 全文搜索 |
+| `node-pty` | `npm rebuild` Linux 编译 | 集成终端 |
+| `native-keymap` | `npm rebuild` Linux 编译 | 键盘布局映射 |
+| `kerberos` | `npm rebuild`（需 `libkrb5-dev`） | Kerberos 认证 |
+
+### Windows 专用模块（移除，VSCode 代码已有 Linux 回退）
+
+| 包名 | 处理方式 | 原因 |
+|------|---------|------|
+| `windows-foreground-love` | 移除 .node | VSCode Linux 不使用 |
+| `native-is-elevated` | 移除 .node | VSCode Linux 不使用 |
+| `registry-js` | 移除 .node | Linux 无注册表 |
+
+### 私有包（保留 DLL，功能不可用）
+
+以下包的 Linux 版本已声明但在私有 registry 上不可获取：
+- `@aha-kit/net-linux-x64-gnu` — TTNet 网络
+- `@aha-kit/ipc-linux-x64` — 进程间通信
+- `@aha-kit/perf-sdk-linux-x64` — 性能 SDK
+- `@byted-icube/trae-network-client-linux-x64-gnu` — 网络客户端
+- `@byted-fe/fd-linux-x64` — 文件操作
+
+根目录 9 个 DLL 被字节跳动定制 Electron 二进制的 C++ 代码通过 `LoadLibrary` 加载，标准 Linux Electron 无这些代码，无法恢复。
+
 ## 不可用功能错误提示机制
 
 启动脚本中加入检测逻辑，首次启动时通过 `zenity`（或 `notify-send` 回退）弹出提示，告知用户哪些功能在 Linux 上不可用：
