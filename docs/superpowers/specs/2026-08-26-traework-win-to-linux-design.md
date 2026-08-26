@@ -61,15 +61,15 @@ VSCode 1.107.1 Linux x64 .tar.gz
 
 | DLL | 功能 | 处理方式 |
 |-----|------|----------|
-| `aha_net.dll` | TTNet 网络层 | 保留在 win-dlls/，静默降级 |
-| `sscronet.dll` | Cronet 网络 | 保留在 win-dlls/，静默降级 |
-| `metasecml.dll` | 安全模块 | 保留在 win-dlls/，静默降级 |
-| `aha_kit_wer.dll` | 错误上报 | 保留在 win-dlls/，静默降级 |
-| `doctor_sdk.dll` | 诊断 SDK | 保留在 win-dlls/，静默降级 |
-| `simplelog.dll` | 日志 | 保留在 win-dlls/，静默降级 |
-| `logifier_retrieval.dll` | 日志检索 | 保留在 win-dlls/，静默降级 |
-| `innoplugin.dll` | 插件系统 | 保留在 win-dlls/，静默降级 |
-| `TTNetDownloaderCrossPlatform.dll` | 下载器 | 保留在 win-dlls/，静默降级 |
+| `aha_net.dll` | TTNet 网络层 | 保留在 win-dlls/，启动时提示不可用 |
+| `sscronet.dll` | Cronet 网络 | 保留在 win-dlls/，启动时提示不可用 |
+| `metasecml.dll` | 安全模块 | 保留在 win-dlls/，启动时提示不可用 |
+| `aha_kit_wer.dll` | 错误上报 | 保留在 win-dlls/，启动时提示不可用 |
+| `doctor_sdk.dll` | 诊断 SDK | 保留在 win-dlls/，启动时提示不可用 |
+| `simplelog.dll` | 日志 | 保留在 win-dlls/，启动时提示不可用 |
+| `logifier_retrieval.dll` | 日志检索 | 保留在 win-dlls/，启动时提示不可用 |
+| `innoplugin.dll` | 插件系统 | 保留在 win-dlls/，启动时提示不可用 |
+| `TTNetDownloaderCrossPlatform.dll` | 下载器 | 保留在 win-dlls/，启动时提示不可用 |
 
 ### 替换为 Linux 等效工具
 
@@ -166,11 +166,33 @@ Recommends: ffmpeg
 - **应用图标**: 从 `TRAE SOLO CN.exe` 的 PE 资源中提取（RT_GROUP_ICON, 256x256 PNG），已提取为 `trae-icon-256.png`
 - **innoextract**: 从源码编译（apt 版本 1.9 不支持 Inno Setup 6.4.0.1），源码: github.com/dscharrer/innoextract
 
+## 不可用功能错误提示机制
+
+启动脚本中加入检测逻辑，首次启动时通过 `zenity`（或 `notify-send` 回退）弹出提示，告知用户哪些功能在 Linux 上不可用：
+
+**提示内容示例：**
+```
+TRAE SOLO CN (Linux 版)
+以下功能在当前 Linux 环境下不可用：
+  • AI 网络服务（TTNet）— 部分在线功能可能受限
+  • 安全模块 / 错误上报 / 诊断工具
+  • 自动更新（请使用 apt upgrade 更新）
+核心编辑器功能不受影响。
+[不再提示]  [确定]
+```
+
+**实现方式：**
+- 启动脚本检测标记文件 `~/.config/trae-solo-cn/linux-warning-shown`
+- 若不存在则弹出 zenity 提示，用户点击"确定"后创建标记文件
+- 用户可通过 `--reset-warnings` 参数重置提示
+- 若 zenity 不可用则回退到 `notify-send` 桌面通知
+- aha_doctor 占位脚本运行时输出具体不可用原因
+
 ## 已知限制
 
-1. **字节跳动专有 DLL**: 遥测、网络（TTNet）、安全、诊断等 DLL 在 Linux 上无法加载，相关功能静默降级
-2. **aha_doctor**: Windows 诊断工具不可用，提供占位脚本
-3. **自动更新**: Inno Setup 更新器不可用，通过 apt upgrade 更新
+1. **字节跳动专有 DLL**: 遥测、网络（TTNet）、安全、诊断等 DLL 在 Linux 上无法加载，启动时弹出提示告知用户
+2. **aha_doctor**: Windows 诊断工具不可用，运行占位脚本时输出提示信息
+3. **自动更新**: Inno Setup 更新器不可用，通过 apt upgrade 更新（提示中说明）
 4. **网络层**: 如果核心 API 通信依赖 TTNet（aha_net.dll/sscronet.dll），部分在线功能可能受影响
 
 ## 构建流程
