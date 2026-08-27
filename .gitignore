@@ -13,6 +13,7 @@ deb-pkg/DEBIAN/md5sums
 
 # 源材料（需自行下载）
 extracted/
+extracted-new/
 .traecode-extract/
 TraeCode_CN-linux-x64.deb
 TraeWork_CN-Setup-x64.exe
