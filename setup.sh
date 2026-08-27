@@ -10,7 +10,10 @@
 #   或（已解压过安装包）：
 #   bash setup.sh --extracted /path/to/extracted/code\$GetDestDir
 #
-# 依赖：7z (p7zip-full)、dpkg-deb、rsync、python3
+# 自动识别安装包格式：
+#   - Inno Setup（0.1.58 起）：需要 innoextract >= 1.10；发行版自带的 1.9 过旧，
+#     优先使用本目录 .innoextract-src/build/innoextract（自编译版）
+#   - NSIS（0.1.54 及更早）：使用 7z (p7zip-full)
 # 完成后执行：bash build.sh 构建 deb 包
 # ============================================================================
 set -euo pipefail
@@ -48,6 +51,13 @@ for tool in rsync python3 dpkg-deb; do
     command -v "$tool" >/dev/null 2>&1 || die "缺少依赖: $tool"
 done
 
+# 定位可用的 innoextract（自编译版支持 Inno Setup 6.4+，发行版 1.9 过旧）
+find_innoextract() {
+    local cand="${SCRIPT_DIR}/.innoextract-src/build/innoextract"
+    [[ -x "$cand" ]] && { echo "$cand"; return 0; }
+    command -v innoextract 2>/dev/null
+}
+
 # ---------- Step 1: 准备 TraeWork 源目录 ----------
 TWROOT=""
 if [[ -n "$EXTRACTED_DIR" ]]; then
@@ -55,11 +65,19 @@ if [[ -n "$EXTRACTED_DIR" ]]; then
     TWROOT="$EXTRACTED_DIR"
 elif [[ -n "$WIN_EXE" ]]; then
     [[ -f "$WIN_EXE" ]] || die "安装包不存在: $WIN_EXE"
-    command -v 7z >/dev/null 2>&1 || die "解压 .exe 需要 7z（apt install p7zip-full）"
     EXTRACT_DIR="${SCRIPT_DIR}/extracted"
-    echo ">>> [1/4] 解压 Windows 安装包 ..."
     mkdir -p "$EXTRACT_DIR"
-    7z x -y -o"$EXTRACT_DIR" "$WIN_EXE" >/dev/null
+    # 格式探测：新版安装包（0.1.58+）为 Inno Setup，旧版为 NSIS（7z 可解）
+    if grep -qaI --binary-files=text -m1 'Inno Setup' "$WIN_EXE"; then
+        INNOEXTRACT="$(find_innoextract || true)"
+        [[ -n "$INNOEXTRACT" ]] || die "Inno Setup 安装包需要 innoextract >= 1.10：\n  git clone https://github.com/dscharrer/innoextract .innoextract-src && cd .innoextract-src && mkdir build && cd build && cmake .. && make"
+        echo ">>> [1/4] 解压 Windows 安装包 (Inno Setup, 使用 $INNOEXTRACT) ..."
+        "$INNOEXTRACT" -d "$EXTRACT_DIR" "$WIN_EXE" >/dev/null
+    else
+        command -v 7z >/dev/null 2>&1 || die "解压 NSIS 安装包需要 7z（apt install p7zip-full）"
+        echo ">>> [1/4] 解压 Windows 安装包 (NSIS) ..."
+        7z x -y -o"$EXTRACT_DIR" "$WIN_EXE" >/dev/null
+    fi
     TWROOT="${EXTRACT_DIR}/code\$GetDestDir"
     [[ -d "$TWROOT" ]] || die "解压后未找到 code\$GetDestDir 目录"
 else

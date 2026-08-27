@@ -18,6 +18,9 @@ extracted-new/
 TraeCode_CN-linux-x64.deb
 TraeWork_CN-Setup-x64.exe
 
+# 自编译的 innoextract（用于解析 Inno Setup 6.4+ 安装包）
+.innoextract-src/
+
 # 图标缓存
 deb-pkg/usr/share/icons/
 
@@ -27,7 +30,3 @@ deb-pkg/usr/share/icons/
 # pica 打包工作目录（保留配置，排除生成内容）
 pica-work/*
 !pica-work/package.yaml
-
-# Python 编译缓存
-__pycache__/
-*.pyc

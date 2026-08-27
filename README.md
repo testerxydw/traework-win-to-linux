@@ -32,6 +32,14 @@ TraeWork 与 TraeCode 同源（VS Code 1.107.1 内核），但使用不同的 UI
 
 前置：下载 `TraeWork_CN-Setup-x64.exe`，并安装（或下载）`TraeCode_CN-linux-x64.deb`。
 
+> ℹ️ 0.1.58 起的安装包为 Inno Setup 6.4 格式，需要 innoextract ≥ 1.10（发行版自带的 1.9 无法解析）。
+> setup.sh 会优先使用本目录 `.innoextract-src/build/innoextract`（自编译版）：
+> ```bash
+> git clone --depth 1 https://github.com/dscharrer/innoextract.git .innoextract-src
+> cmake -S .innoextract-src -B .innoextract-src/build && cmake --build .innoextract-src/build -j$(nproc)
+> ```
+> 0.1.54 及更早的 NSIS 格式安装包则仍用 7z 解压。
+
 ```bash
 # 1. 提取源文件，重建打包目录
 bash setup.sh /path/to/TraeWork_CN-Setup-x64.exe
@@ -73,6 +81,23 @@ bash build-linglong.sh --skip-build
 - `scripts/fix-linglong-yaml.py`  # 应用本项目已验证的适配修复
 
 玲珑版特性：沙箱隔离、无需 `--no-sandbox` 手动参数（已内置）、自带全部依赖。
+
+
+## 与 deb 版共存
+
+玲珑版与 deb 版可同时安装、互不干扰，方便 A/B 测试：
+
+| 项目 | deb 版 | 玲珑版 |
+|------|--------|--------|
+| 桌面入口 | `TRAE SOLO CN` | `TRAE SOLO CN (玲珑版)` |
+| desktop 文件 | `trae-solo-cn.desktop` | `trae-solo-cn-linglong.desktop` |
+| 应用文件 | `/opt/trae-solo-cn` | 沙箱 `/opt/apps/trae-solo-cn/files` |
+| 启动命令 | `/opt/trae-solo-cn/trae-solo-cn` | `ll-cli run trae-solo-cn` |
+
+- **用户数据共用** `~/.config/TRAE SOLO CN`（登录、配置、扩展一致）。
+- **不要同时运行**两个版本：共用用户数据触发 Electron 单实例锁，后启动者会退出。
+- 如需同时对比，可给其中一个指定独立数据目录：
+  `ll-cli run trae-solo-cn -- --user-data-dir ~/.config/TRAE-SOLO-linglong-test`
 
 ## 功能状态（真实测试 2026-08-26）
 
