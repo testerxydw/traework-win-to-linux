@@ -46,6 +46,34 @@ sudo dpkg -i trae-solo-cn_*_amd64.deb
 /opt/trae-solo-cn/trae-solo-cn --no-sandbox
 ```
 
+
+## 玲珑包构建（如意玲珑 / uab）
+
+在 deb 构建完成后，可用脚本一键转换为如意玲珑 uab 包（自动完成依赖解析、
+Electron 沙箱适配、桌面入口修复等）：
+
+```bash
+# 1. 构建 deb（可选，若已有 trae-solo-cn_*_amd64.deb 可跳过）
+bash build.sh
+
+# 2. 转换并打包为玲珑 uab（自动选择最新 deb）
+bash build-linglong.sh
+
+# 3. 构建并安装到系统
+bash build-linglong.sh --install
+
+# 仅生成/修复 linglong.yaml（不构建，用于调试）
+bash build-linglong.sh --skip-build
+```
+
+产物：`pica-work/package/trae-solo-cn/trae-solo-cn_<版本>_x86_64_main.uab`
+
+脚本组成：
+- `build-linglong.sh`       # 主流程：ll-pica 转换 → 修复 → ll-builder build/export
+- `scripts/fix-linglong-yaml.py`  # 应用本项目已验证的适配修复
+
+玲珑版特性：沙箱隔离、无需 `--no-sandbox` 手动参数（已内置）、自带全部依赖。
+
 ## 功能状态（真实测试 2026-08-26）
 
 - ✅ **可用**: solo-lite UI、AI Agent、CKG、插件市场、Git 集成、API 连通

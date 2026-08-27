@@ -26,3 +26,7 @@ deb-pkg/usr/share/icons/
 # pica 打包工作目录（保留配置，排除生成内容）
 pica-work/*
 !pica-work/package.yaml
+
+# Python 编译缓存
+__pycache__/
+*.pyc
