@@ -26,6 +26,7 @@ deb-pkg/usr/share/icons/
 
 # IDE / 工具数据
 .codebuddy/
+__pycache__/
 
 # pica 打包工作目录（保留配置，排除生成内容）
 pica-work/*
