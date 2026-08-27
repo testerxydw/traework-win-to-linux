@@ -134,7 +134,9 @@ TWAPP="$TWROOT/resources/app"
 rsync -a --delete "$TWAPP/out/" "$RES_DIR/out/"
 cp -f "$TWAPP/package.json" "$RES_DIR/"
 
-# product.json：复制后修改 buildPlatform 为 linux
+# product.json：复制后修改 buildPlatform 为 linux，并注入原生标题栏默认值
+# （0.1.58 起 main.js 无条件启用 titleBarOverlay，Linux 上会出现白色遮挡块，
+#   需强制 window.titleBarStyle=native 回到系统标题栏）
 cp -f "$TWAPP/product.json" "$RES_DIR/"
 python3 - "$RES_DIR/product.json" << 'PYEOF'
 import json, sys
@@ -142,9 +144,10 @@ p = sys.argv[1]
 with open(p) as f:
     d = json.load(f)
 d['buildPlatform'] = 'linux'
+d.setdefault('configurationDefaults', {})['window.titleBarStyle'] = 'native'
 with open(p, 'w') as f:
     json.dump(d, f, indent='\t')
-print(f"product.json: {d.get('nameShort')} v{d.get('version')} buildPlatform=linux")
+print(f"product.json: {d.get('nameShort')} v{d.get('version')} buildPlatform=linux titleBarStyle=native")
 PYEOF
 
 # 关键：solo-lite 模块（TraeCode 没有 dist/，必须从 TraeWork 复制）
