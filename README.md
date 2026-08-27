@@ -63,4 +63,4 @@ sudo dpkg -i trae-solo-cn_*_amd64.deb
 ## 镜像仓库
 
 - GitHub: https://github.com/testerxydw/traework-win-to-linux
-- Gitee: https://gitee.com/testerxydw/traework-win-to-linux
+- Gitee: https://gitee.com/xiyidaiwa/traework-win-to-linux
