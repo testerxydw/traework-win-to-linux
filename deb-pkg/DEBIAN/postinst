@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+# Update desktop database
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications/ 2>/dev/null || true
+fi
+
+# Update icon cache
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q /usr/share/icons/hicolor/ 2>/dev/null || true
+fi
+
+# SUID 沙箱助手：确保 chrome-sandbox 为 root:root 且带 setuid 位，
+# 以兼容未启用 unprivileged user namespaces 的内核（否则 Chromium 需要 --no-sandbox）
+if [ -f /opt/trae-solo-cn/chrome-sandbox ]; then
+    chown root:root /opt/trae-solo-cn/chrome-sandbox 2>/dev/null || true
+    chmod 4755 /opt/trae-solo-cn/chrome-sandbox 2>/dev/null || true
+fi
+
+echo "TRAE SOLO CN has been installed to /opt/trae-solo-cn/"
+echo "Run 'trae-solo-cn' from terminal or find it in your application menu."

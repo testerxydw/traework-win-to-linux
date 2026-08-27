@@ -1,39 +1,66 @@
-# traework-win-to-linux
+# TraeWork CN → Linux deb 重打包
 
-#### 介绍
-{**以下是 Gitee 平台说明，您可以替换此简介**
-Gitee 是 OSCHINA 推出的基于 Git 的代码托管平台（同时支持 SVN）。专为开发者提供稳定、高效、安全的云端软件开发协作平台
-无论是个人、团队、或是企业，都能够用 Gitee 实现代码托管、项目管理、协作开发。企业项目请看 [https://gitee.com/enterprises](https://gitee.com/enterprises)}
+将 Windows 版 **TraeWork CN**（TRAE SOLO）拆解后重新打包为 Linux deb 包。
 
-#### 软件架构
-软件架构说明
+> ⚠️ 本项目为非官方移植，仅供学习交流。所有软件版权归原开发方（ByteDance）所有。
 
+## 原理
 
-#### 安装教程
+TraeWork 与 TraeCode 同源（VS Code 1.107.1 内核），但使用不同的 UI 变体：
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+| 组件 | 来源 | 作用 |
+|------|------|------|
+| Electron 二进制 + 原生 `.so` | TraeCode CN **Linux** deb | Chromium 运行时、AI Agent、CKG 模块 |
+| JS 资源 `out/` + `product.json` | TraeWork CN **Windows** 安装包 | solo-lite AI 工作台 UI |
+| `@byted-icube/solo-lite/dist/` | TraeWork CN **Windows** 安装包 | UI 核心模块（TraeCode 没有此文件） |
 
-#### 使用说明
+## 文件结构
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+```
+├── setup.sh              # 源文件提取脚本（重建 deb-pkg 大文件）
+├── build.sh              # deb 构建脚本（版本自增 + md5sums + dpkg-deb）
+├── deb-pkg/              # 打包目录
+│   ├── DEBIAN/           # control/postinst/prerm/postrm（入库）
+│   ├── opt/.../trae-solo-cn   # 启动脚本（入库）
+│   └── opt/.../其余内容        # 由 setup.sh 生成（不入库）
+├── pica-work/            # deepin pica 打包配置
+├── docs/                 # 设计文档与实施计划
+└── README-功能说明.md     # 功能可用/不可用清单
+```
 
-#### 参与贡献
+## 快速构建
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+前置：下载 `TraeWork_CN-Setup-x64.exe`，并安装（或下载）`TraeCode_CN-linux-x64.deb`。
 
+```bash
+# 1. 提取源文件，重建打包目录
+bash setup.sh /path/to/TraeWork_CN-Setup-x64.exe
 
-#### 特技
+# 2. 构建 deb（版本自动递增）
+bash build.sh
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+# 3. 安装
+sudo dpkg -i trae-solo-cn_*_amd64.deb
+
+# 4. 启动（桌面菜单 "TRAE SOLO CN"，或）
+/opt/trae-solo-cn/trae-solo-cn --no-sandbox
+```
+
+## 功能状态（真实测试 2026-08-26）
+
+- ✅ **可用**: solo-lite UI、AI Agent、CKG、插件市场、Git 集成、API 连通
+- ⚠️ **有异常**: 飞书 Token 刷新、计费状态、自动更新（无）
+- ❌ **不可用**: 积分、企业模型、专家模式等（产品功能开关关闭）
+
+详见 [README-功能说明.md](README-功能说明.md)。
+
+## 相关资源
+
+- [English README](README.en.md)
+- 设计文档: [docs/superpowers/specs/](docs/superpowers/specs/)
+- 实施计划: [docs/superpowers/plans/](docs/superpowers/plans/)
+
+## 镜像仓库
+
+- GitHub: https://github.com/testerxydw/traework-win-to-linux
+- Gitee: https://gitee.com/testerxydw/traework-win-to-linux

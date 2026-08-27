@@ -1,6 +1,28 @@
-# 构建产物（体积过大，不纳入版本控制）
-deb-pkg/
+# ===== 构建产物与大文件（由 setup.sh 生成，不纳入版本控制） =====
+
+# deb 打包目录中的大文件（Chromium 运行时、应用资源、原生库）
+deb-pkg/opt/trae-solo-cn/*
+# 保留启动脚本
+!deb-pkg/opt/trae-solo-cn/trae-solo-cn
+
+# DEBIAN 自动生成的校验文件（build.sh 会重新生成）
+deb-pkg/DEBIAN/md5sums
+
+# 构建输出的 deb 包（约 500MB/个）
 *.deb
 
-# 例外：保留仓库中已跟踪的发布包（如 trae-solo-cn_*.deb 已提交）
-!trae-solo-cn_*.deb
+# 源材料（需自行下载）
+extracted/
+.traecode-extract/
+TraeCode_CN-linux-x64.deb
+TraeWork_CN-Setup-x64.exe
+
+# 图标缓存
+deb-pkg/usr/share/icons/
+
+# IDE / 工具数据
+.codebuddy/
+
+# pica 打包工作目录（保留配置，排除生成内容）
+pica-work/*
+!pica-work/package.yaml

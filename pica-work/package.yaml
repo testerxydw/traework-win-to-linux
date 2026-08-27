@@ -1,0 +1,13 @@
+runtime:
+  version: 25.2.1.5
+  base_version: 25.2.1.3
+  source: https://ci.deepin.com/repo/deepin/deepin-community/stable
+  distro_version: crimson/release
+  arch: amd64
+file:
+  deb:
+    - type: local
+      id: trae-solo-cn
+      name: trae-solo-cn
+      ref: /media/dp25/DATA/deb/fcitx5-deb/traework-win-to-linux/trae-solo-cn_0.1.54-14_amd64.deb
+

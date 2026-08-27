@@ -1,0 +1,17 @@
+[Desktop Entry]
+Name=TRAE SOLO CN
+Comment=AI-powered code editor (Linux port)
+GenericName=Code Editor
+Exec=/opt/trae-solo-cn/trae-solo-cn %F
+Icon=trae-solo-cn
+Type=Application
+StartupNotify=true
+StartupWMClass=trae-solo-cn
+Categories=Development;IDE;TextEditor;
+MimeType=text/plain;inode/directory;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=/opt/trae-solo-cn/trae-solo-cn --new-window %F
+Icon=trae-solo-cn

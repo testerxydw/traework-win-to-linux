@@ -1,0 +1,13 @@
+Package: trae-solo-cn
+Version: 0.1.54-11
+Section: editors
+Priority: optional
+Architecture: amd64
+Installed-Size: 1699152
+Maintainer: TraeWork CN Linux Packager <noreply@trae.com.cn>
+Description: TRAE SOLO CN - AI-powered code editor (Linux port)
+ TraeWork CN is an AI-powered code editor based on VS Code,
+ developed by ByteDance. This is a Linux port using TraeCode CN
+ Linux Electron runtime with full native module support.
+Depends: libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils, libatspi2.0-0, libsecret-1-0, libgbm1, libasound2
+Recommends: ffmpeg, curl

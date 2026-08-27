@@ -1,0 +1,13 @@
+#!/bin/bash
+# TRAE SOLO CN - Linux Launcher
+# Repackaged from Windows installer with TraeCode CN Linux Electron runtime
+
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+ELECTRON="$APP_DIR/trae-solo-cn-bin"
+
+# 提升文件描述符上限，避免 File Watcher 出现 EMFILE: too many open files
+# （DDE/桌面环境默认 ulimit -n 常为 1024，对 Electron 文件监控过低）
+ulimit -n 65535 2>/dev/null || true
+
+# Launch directly - let Electron resolve resources from its own location
+exec "$ELECTRON" "$@"
