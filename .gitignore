@@ -1,0 +1,6 @@
+# 构建产物（体积过大，不纳入版本控制）
+deb-pkg/
+*.deb
+
+# 例外：保留仓库中已跟踪的发布包（如 trae-solo-cn_*.deb 已提交）
+!trae-solo-cn_*.deb
