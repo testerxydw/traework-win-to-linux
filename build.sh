@@ -12,6 +12,13 @@
 #   bash build.sh --deb-only                     # 拆包 + 构建 deb + 安装 deb（不转玲珑）
 #   bash build.sh --ll-only                      # 仅用现有最新 deb 构建玲珑 + 安装玲珑
 #   bash build.sh --no-install                   # 全部构建但都不安装
+#   bash build.sh --install-deps                 # 一键安装构建所需的全部依赖工具后退出
+#
+# 依赖说明：
+#   基础工具 rsync/python3/dpkg-deb/sed/grep/md5sum 一般系统自带
+#   解包：NSIS 需 7z（包名 7zip）；Inno Setup 需 innoextract>=1.10（apt 只有 1.9 需自编译）
+#   玲珑：ll-pica/ll-builder/ll-cli（包名 linglong-pica/linglong-builder/linglong-bin）
+#   上述均可用 --install-deps 自动装齐
 #
 # 源材料（需自行准备）：
 #   1. TraeWork CN Windows 安装包（0.1.58 起为 Inno Setup，旧版为 NSIS）
@@ -51,6 +58,76 @@ usage() {
     exit 1
 }
 
+# ---------- 依赖安装（--install-deps）----------
+# 只安装当前缺失的工具；innoextract 因 apt 仓库只有 1.9（不支持 Inno 6.4），
+# 需自编译 master 分支（依赖 git/cmake/g++/libboost-*-dev/liblzma-dev）。
+install_deps() {
+    log "安装构建依赖（仅装缺失项）"
+    command -v sudo >/dev/null 2>&1 || die "缺少 sudo，无法自动安装依赖"
+
+    # 1) apt 包：按命令→包名映射，缺失才装
+    local apt_pkgs=()
+    local cmd pkg
+    for pair in \
+        "7z:7zip" \
+        "rsync:rsync" \
+        "python3:python3" \
+        "dpkg-deb:dpkg" \
+        "python3-yaml:python3-yaml" \
+        "ll-pica:linglong-pica" \
+        "ll-builder:linglong-builder" \
+        "ll-cli:linglong-bin"; do
+        cmd="${pair%%:*}"; pkg="${pair##*:}"
+        case "$cmd" in
+            python3-yaml) python3 -c 'import yaml' 2>/dev/null || apt_pkgs+=("$pkg") ;;
+            *) command -v "$cmd" >/dev/null 2>&1 || apt_pkgs+=("$pkg") ;;
+        esac
+    done
+
+    # 2) innoextract：先看自编译产物，再看系统版本 >=1.10，都不满足则需编译工具链
+    local need_inno=1
+    if [[ -x "${SCRIPT_DIR}/.innoextract-src/build/innoextract" ]]; then
+        need_inno=0
+    elif command -v innoextract >/dev/null 2>&1; then
+        local iv
+        iv="$(innoextract --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -n 1)"
+        [[ "${iv:-0.0}" != "1.9" ]] && need_inno=0   # 1.9 过旧，其他视为可用
+    fi
+    if [[ "$need_inno" -eq 1 ]]; then
+        for pair in "git:git" "cmake:cmake" "g++:g++"; do
+            cmd="${pair%%:*}"; pkg="${pair##*:}"
+            command -v "$cmd" >/dev/null 2>&1 || apt_pkgs+=("$pkg")
+        done
+        # boost 组件 dev 包（innoextract 需 filesystem/program-options/iostreams/regex 等）
+        apt_pkgs+=(libboost-filesystem-dev libboost-program-options-dev libboost-iostreams-dev libboost-regex-dev libboost-system-dev liblzma-dev)
+    fi
+
+    # 3) 去重后一次性 apt 安装
+    if [[ ${#apt_pkgs[@]} -gt 0 ]]; then
+        local uniq
+        uniq="$(printf '%s\n' "${apt_pkgs[@]}" | awk '!seen[$0]++' | tr '\n' ' ')"
+        step "apt 安装: ${uniq}"
+        sudo apt-get update -qq || step "apt update 失败，继续尝试安装"
+        # shellcheck disable=SC2086
+        sudo apt-get install -y --no-install-recommends ${uniq} || die "apt 安装失败，请手动检以上包名"
+    else
+        step "apt 包均已就绪"
+    fi
+
+    # 4) 自编译 innoextract（仅当需要且无产物时）
+    if [[ "$need_inno" -eq 1 && ! -x "${SCRIPT_DIR}/.innoextract-src/build/innoextract" ]]; then
+        step "自编译 innoextract >= 1.10（apt 版本不支持 Inno Setup 6.4）..."
+        [[ -d "${SCRIPT_DIR}/.innoextract-src" ]] || \
+            git clone --depth 1 https://github.com/dscharrer/innoextract.git "${SCRIPT_DIR}/.innoextract-src"
+        cmake -S "${SCRIPT_DIR}/.innoextract-src" -B "${SCRIPT_DIR}/.innoextract-src/build" >/dev/null
+        cmake --build "${SCRIPT_DIR}/.innoextract-src/build" -j"$(nproc)" >/dev/null
+        [[ -x "${SCRIPT_DIR}/.innoextract-src/build/innoextract" ]] || die "innoextract 编译失败"
+        step "innoextract 编译完成: $(${SCRIPT_DIR}/.innoextract-src/build/innoextract --version | head -n1)"
+    fi
+
+    step "依赖安装完成，可重新执行构建命令"
+}
+
 # ---------- 参数解析 ----------
 WIN_EXE=""
 EXTRACTED_DIR=""
@@ -58,6 +135,7 @@ DO_EXTRACT=1
 DO_DEB=1
 DO_LL=1
 DO_INSTALL=1
+RUN_INSTALL_DEPS=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -66,19 +144,22 @@ while [[ $# -gt 0 ]]; do
         --deb-only)    DO_LL=0; shift ;;
         --ll-only)     DO_EXTRACT=0; DO_DEB=0; shift ;;
         --no-install)  DO_INSTALL=0; shift ;;
+        --install-deps) RUN_INSTALL_DEPS=1; shift ;;
         -h|--help)     usage ;;
         *.exe)         WIN_EXE="$1"; shift ;;
         *) echo "未知参数: $1" >&2; usage ;;
     esac
 done
 
-if [[ "${DO_DEB}" -eq 0 && "${DO_LL}" -eq 1 && "${DO_EXTRACT}" -eq 1 ]]; then
-    DO_EXTRACT=0  # 仅玲珑时无需拆包
+# ---------- 依赖安装模式（装完即退出，不需预先具备任何构建工具）----------
+if [[ "${RUN_INSTALL_DEPS}" -eq 1 ]]; then
+    install_deps
+    exit 0
 fi
 
 # ---------- 依赖检查 ----------
 for tool in rsync python3 dpkg-deb sed grep md5sum chmod; do
-    command -v "$tool" >/dev/null 2>&1 || die "缺少依赖: $tool"
+    command -v "$tool" >/dev/null 2>&1 || die "缺少依赖: $tool（可运行 bash build.sh --install-deps 自动安装）"
 done
 
 # 定位可用的 innoextract（自编译版支持 Inno Setup 6.4+，发行版 1.9 过旧）
