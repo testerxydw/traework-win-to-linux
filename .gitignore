@@ -21,6 +21,7 @@ TraeWork_CN-Setup-x64.exe
 
 # 自编译的 innoextract（用于解析 Inno Setup 6.4+ 安装包）
 .innoextract-src/
+.innoextract-src/build
 
 # 图标缓存
 deb-pkg/usr/share/icons/
