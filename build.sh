@@ -333,6 +333,17 @@ stage_deb() {
     sed -i "s/^Version: .*/Version: ${new_version}/" "${CONTROL_FILE}"
     step "版本: ${old_version} -> ${new_version}"
 
+    # 重算 Installed-Size（单位 KiB，排除 DEBIAN 元数据）：手写值会随内容增删而过期，
+    # 导致系统「应用管理」显示体积失真（实测虚标 1.6G vs 磁盘实际 1.2G）
+    local installed_size
+    installed_size="$(du -s --block-size=1K --exclude=DEBIAN "${PKG_DIR}" | cut -f1)"
+    if grep -qE '^Installed-Size: ' "${CONTROL_FILE}"; then
+        sed -i "s/^Installed-Size: .*/Installed-Size: ${installed_size}/" "${CONTROL_FILE}"
+    else
+        sed -i "/^Version: /a Installed-Size: ${installed_size}" "${CONTROL_FILE}"
+    fi
+    step "Installed-Size 重算: ${installed_size} KiB ($(awk -v k="${installed_size}" 'BEGIN{printf "%.2f GiB", k/1024/1024}'))"
+
     # 维护脚本权限
     chmod 755 "${PKG_DIR}/DEBIAN/postinst" "${PKG_DIR}/DEBIAN/prerm" "${PKG_DIR}/DEBIAN/postrm"
 
