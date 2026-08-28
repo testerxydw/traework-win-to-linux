@@ -217,7 +217,7 @@ WorkBuddy 是自绘标题栏应用，Linux 下若三键不显示，启动时加�
 ## 关联
 
 - 同类技能：`traework-deb-repack`（VS Code 分支的移植，可对比参考）
-- 一键脚本：`workbuddy-build/scripts/build-workbuddy.sh`（拆包→组装→仅产出 deb）
+- 一键脚本：`build-workbuddy.sh`（项目根目录，拆包→组装→仅产出 deb）
   ```bash
   bash build-workbuddy.sh                          # 自动找源材料
   bash build-workbuddy.sh <win.exe> <社区.deb>      # 显式指定

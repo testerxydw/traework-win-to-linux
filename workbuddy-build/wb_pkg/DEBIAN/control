@@ -1,0 +1,19 @@
+Package: workbuddy
+Version: 5.3.14-1
+Installed-Size: 977808
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Local Porter <local@localhost>
+Homepage: https://www.codebuddy.ai
+Depends: libc6 (>= 2.28), libstdc++6, libgtk-3-0 | libgtk-4-1, libnss3, libxss1, libxtst6, libasound2 | libasound2t64, libgbm1, libdrm2, libatk-bridge2.0-0 | libatk-bridge2.0-0t64, libatk1.0-0 | libatk1.0-0t64, libatspi2.0-0 | libatspi2.0-0t64, libcairo2, libpango-1.0-0 | libpango-1.0-0t64, libx11-6, libxcb1, libxcomposite1 | libxcomposite1t64, libxdamage1 | libxdamage1t64, libxext6 | libxext6t64, libxfixes3 | libxfixes3t64, libxkbcommon0, libxkbfile1 | libxkbfile1t64, libxrandr2 | libxrandr2t64, libcurl3-gnutls | libcurl4, libexpat1 | libexpat1t64, libglib2.0-0 | libglib2.0-0t64, libnspr4, libudev1, xdg-utils
+Recommends: git, python3
+Description: WorkBuddy - AI Agent 桌面工作台 (Linux 移植版)
+ WorkBuddy 是腾讯推出的 AI Agent 桌面应用。本包为 Linux 移植版：
+ 应用代码取自官方 Windows 版 5.3.14 的安装包解包结果，Electron 运行时
+ 采用社区移植版构建（Electron 39.2.7，ABI 与 5.3.14 原生模块匹配）。
+ .
+ 已知限制：受平台差异影响，部分依赖 Windows 原生能力的特性不可用，
+ 例如微信消息解码（wechat-copydata-decoder）缺失自动降级；遥测相关调用已安全降级。
+ .
+ 非官方移植，仅供学习交流。
