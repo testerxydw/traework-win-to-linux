@@ -52,7 +52,12 @@ bash build.sh --skip-extract                    # 跳过拆包，用现有 deb-p
 bash build.sh --deb-only                        # 只到 deb（不转玲珑）
 bash build.sh --ll-only                         # 只用最新 deb 转玲珑
 bash build.sh --no-install                      # 全部构建但都不安装
+bash build.sh --install-deps                    # 一键装齐依赖（apt 包 + 自编译 innoextract）
 ```
+
+新机器首次使用：先 `bash build.sh --install-deps` 自动安装 7zip、linglong 工具链、
+python3-yaml 等 apt 包，并 clone + 编译 innoextract ≥ 1.10（发行版仓库只有 1.9，
+不支持 Inno Setup 6.4，无法用 apt 解决）；之后直接 `bash build.sh` 即可。
 
 启动：桌面菜单 `TRAE SOLO CN`（deb）/ `TRAE SOLO CN (玲珑版)`，或 `/opt/trae-solo-cn/trae-solo-cn`。
 
