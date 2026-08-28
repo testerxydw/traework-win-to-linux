@@ -11,13 +11,14 @@ deb-pkg/DEBIAN/md5sums
 # 构建输出的 deb 包（约 500MB/个）
 *.deb
 *.uab
+*.exe
 
 # 源材料（需自行下载）
 extracted/
 extracted-new/
+workbuddy-build/
 .traecode-extract/
-TraeCode_CN-linux-x64.deb
-TraeWork_CN-Setup-x64.exe
+
 
 # 自编译的 innoextract（用于解析 Inno Setup 6.4+ 安装包）
 .innoextract-src/
@@ -33,3 +34,6 @@ __pycache__/
 # pica 打包工作目录（保留配置，排除生成内容）
 pica-work/*
 !pica-work/package.yaml
+
+# WorkBuddy 移植产物与源材料
+workbuddy-build/**/*.deb
