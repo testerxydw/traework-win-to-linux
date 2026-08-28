@@ -37,3 +37,6 @@ pica-work/*
 
 # WorkBuddy 移植产物与源材料
 workbuddy-build/**/*.deb
+# 但保留构建脚本（拆包打包流程，可复用）
+!workbuddy-build/scripts/
+!workbuddy-build/scripts/**/*.sh
