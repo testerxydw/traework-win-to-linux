@@ -134,9 +134,30 @@ TWAPP="$TWROOT/resources/app"
 rsync -a --delete "$TWAPP/out/" "$RES_DIR/out/"
 cp -f "$TWAPP/package.json" "$RES_DIR/"
 
+# main.js 标题栏回归补丁：0.1.58 起官方删除了 Linux 跳过 titleBarOverlay 的守卫，
+# 导致无白底遮挡块且 frame:false 失去系统标题栏。
+# 注意：product.json 的 configurationDefaults 对主进程建窗代码无效（它只读
+# 简化版配置缓存），必须直接补 main.js。变量名（oW/Lt/rl）为 0.1.58 的 minify 产物，
+# 未来版本失效时降级为警告，不阻断构建。
+echo ">>> 修补 main.js titleBarOverlay Linux 守卫 ..."
+python3 - "$RES_DIR/out/main.js" << 'PYEOF' || echo "  [警告] main.js 未命中已知模式，跳过（若 Linux 出现白块需人工适配）"
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+c1 = 'function oW(t){if(rl)return"custom";'
+c2 = 'l.titleBarOverlay={height:29,color:p,symbolColor:b}'
+if s.count(c1) != 1 or s.count(c2) != 1:
+    sys.exit(1)
+# 1) 标题栏样式解析函数：Linux 强制 native（恢复 0.1.54 行为，Lt=isLinux）
+s = s.replace(c1, c1 + 'if(Lt)return"native";', 1)
+# 2) titleBarOverlay 设置：Linux 跳过（双保险）
+s = s.replace(c2, 'Lt||Object.assign(l,{titleBarOverlay:{height:29,color:p,symbolColor:b}})', 1)
+open(p, 'w').write(s)
+print("  main.js 已修补（Linux 强制 native 标题栏）")
+PYEOF
+
 # product.json：复制后修改 buildPlatform 为 linux，并注入原生标题栏默认值
-# （0.1.58 起 main.js 无条件启用 titleBarOverlay，Linux 上会出现白色遮挡块，
-#   需强制 window.titleBarStyle=native 回到系统标题栏）
+# （对渲染进程侧配置生效；主进程建窗靠上方 main.js 补丁）
 cp -f "$TWAPP/product.json" "$RES_DIR/"
 python3 - "$RES_DIR/product.json" << 'PYEOF'
 import json, sys
