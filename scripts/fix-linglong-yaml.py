@@ -21,9 +21,14 @@ BIN_WRAPPER = f"{APP_PREFIX}/bin/trae-solo-cn"
 LIB_LAUNCHER = f"{APP_PREFIX}/lib/trae-solo-cn/trae-solo-cn"
 
 
-def fix(path: str) -> None:
+def fix(path: str, version: str | None = None) -> None:
     with open(path, encoding="utf-8") as f:
         text = f.read()
+
+    # ---------- 0. 同步 package.version（由 deb 修订号映射，如 0.1.54-14 -> 0.1.54.14） ----------
+    if version:
+        text = re.sub(r"^  version: .*$", f"  version: {version}", text, flags=re.M)
+        print(f"[fix-linglong-yaml]   版本    = {version}")
 
     # ---------- 1. base / runtime ----------
     text = re.sub(r"^base: .*$", "base: org.deepin.base/25.2.2", text, flags=re.M)
@@ -49,7 +54,7 @@ def fix(path: str) -> None:
   install -d $PREFIX/lib/trae-solo-cn
   cp -a $EXTERNAL_DEB_SOURCES/trae-solo-cn/opt/trae-solo-cn/. $PREFIX/lib/trae-solo-cn/
   # 启动脚本：在玲珑沙箱内追加 --no-sandbox
-  sed -i 's#exec "$ELECTRON" "$@"#exec "$ELECTRON" --no-sandbox "$@"#' $PREFIX/lib/trae-solo-cn/trae-solo-cn
+  sed -i 's#exec "$ELECTRON" "$@"#exec "$ELECTRON" --no-sandbox --class=trae-solo-cn-linglong "$@"#' $PREFIX/lib/trae-solo-cn/trae-solo-cn
   chmod +x $PREFIX/lib/trae-solo-cn/trae-solo-cn $PREFIX/lib/trae-solo-cn/trae-solo-cn-bin
   # 移除 usr/bin 中指向 /opt 的失效软链
   rm -f $PREFIX/bin/trae-solo-cn
@@ -83,7 +88,13 @@ def fix(path: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    version = None
+    if "--version" in args:
+        i = args.index("--version")
+        version = args[i + 1] if i + 1 < len(args) else None
+        del args[i : i + 2]
+    if len(args) != 1:
         print(__doc__)
         sys.exit(1)
-    fix(sys.argv[1])
+    fix(args[0], version)

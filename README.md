@@ -17,23 +17,24 @@ TraeWork 与 TraeCode 同源（VS Code 1.107.1 内核），但使用不同的 UI
 ## 文件结构
 
 ```
-├── setup.sh              # 源文件提取脚本（重建 deb-pkg 大文件）
-├── build.sh              # deb 构建脚本（版本自增 + md5sums + dpkg-deb）
+├── build.sh              # 唯一构建入口：拆包 → deb → 玲珑 → 安装
+├── scripts/
+│   └── fix-linglong-yaml.py   # 玲珑 linglong.yaml 适配修复助手（由 build.sh 调用）
 ├── deb-pkg/              # 打包目录
 │   ├── DEBIAN/           # control/postinst/prerm/postrm（入库）
 │   ├── opt/.../trae-solo-cn   # 启动脚本（入库）
-│   └── opt/.../其余内容        # 由 setup.sh 生成（不入库）
-├── pica-work/            # deepin pica 打包配置
+│   └── opt/.../其余内容        # 由 build.sh 拆包阶段生成（不入库）
+├── pica-work/            # 玲珑构建工作目录（build.sh 自动生成，不入库）
 ├── docs/                 # 设计文档与实施计划
 └── README-功能说明.md     # 功能可用/不可用清单
 ```
 
-## 快速构建
+## 一键构建（deb + 玲珑）
 
-前置：下载 `TraeWork_CN-Setup-x64.exe`，并安装（或下载）`TraeCode_CN-linux-x64.deb`。
+前置：下载 `TraeWork_CN-Setup-x64.exe`（放项目目录会被自动发现），并安装（或下载）`TraeCode_CN-linux-x64.deb`。
 
 > ℹ️ 0.1.58 起的安装包为 Inno Setup 6.4 格式，需要 innoextract ≥ 1.10（发行版自带的 1.9 无法解析）。
-> setup.sh 会优先使用本目录 `.innoextract-src/build/innoextract`（自编译版）：
+> build.sh 会优先使用本目录 `.innoextract-src/build/innoextract`（自编译版）：
 > ```bash
 > git clone --depth 1 https://github.com/dscharrer/innoextract.git .innoextract-src
 > cmake -S .innoextract-src -B .innoextract-src/build && cmake --build .innoextract-src/build -j$(nproc)
@@ -41,44 +42,30 @@ TraeWork 与 TraeCode 同源（VS Code 1.107.1 内核），但使用不同的 UI
 > 0.1.54 及更早的 NSIS 格式安装包则仍用 7z 解压。
 
 ```bash
-# 1. 提取源文件，重建打包目录
-bash setup.sh /path/to/TraeWork_CN-Setup-x64.exe
-
-# 2. 构建 deb（版本自动递增）
+# 完整流水线：拆包 → 构建 deb → 转制玲珑 → 安装两个版本
 bash build.sh
 
-# 3. 安装
-sudo dpkg -i trae-solo-cn_*_amd64.deb
-
-# 4. 启动（桌面菜单 "TRAE SOLO CN"，或）
-/opt/trae-solo-cn/trae-solo-cn --no-sandbox
+# 常用变体
+bash build.sh /path/TraeWork_CN-Setup-x64.exe   # 指定安装包
+bash build.sh --extracted <解压目录>            # 复用已解压的 code$GetDestDir
+bash build.sh --skip-extract                    # 跳过拆包，用现有 deb-pkg 直接构建
+bash build.sh --deb-only                        # 只到 deb（不转玲珑）
+bash build.sh --ll-only                         # 只用最新 deb 转玲珑
+bash build.sh --no-install                      # 全部构建但都不安装
 ```
 
+启动：桌面菜单 `TRAE SOLO CN`（deb）/ `TRAE SOLO CN (玲珑版)`，或 `/opt/trae-solo-cn/trae-solo-cn`。
 
-## 玲珑包构建（如意玲珑 / uab）
 
-在 deb 构建完成后，可用脚本一键转换为如意玲珑 uab 包（自动完成依赖解析、
-Electron 沙箱适配、桌面入口修复等）：
+## 玲珑包说明（如意玲珑 / uab）
 
-```bash
-# 1. 构建 deb（可选，若已有 trae-solo-cn_*_amd64.deb 可跳过）
-bash build.sh
-
-# 2. 转换并打包为玲珑 uab（自动选择最新 deb）
-bash build-linglong.sh
-
-# 3. 构建并安装到系统
-bash build-linglong.sh --install
-
-# 仅生成/修复 linglong.yaml（不构建，用于调试）
-bash build-linglong.sh --skip-build
-```
+`build.sh` 的玲珑阶段自动完成：ll-pica 转换 → 适配修复（应用主体复制、
+--no-sandbox、桌面入口 PATH 包装脚本等）→ ll-builder build/export。
 
 产物：`pica-work/package/trae-solo-cn/trae-solo-cn_<版本>_x86_64_main.uab`
 
-脚本组成：
-- `build-linglong.sh`       # 主流程：ll-pica 转换 → 修复 → ll-builder build/export
-- `scripts/fix-linglong-yaml.py`  # 应用本项目已验证的适配修复
+**版本同步规则**：玲珑版本号 = deb 主版本 + 修订号转点分
+（`0.1.58-5` → `0.1.58.5`），确保每次 deb 更新，玲珑包也随之更新且可区分。
 
 玲珑版特性：沙箱隔离、无需 `--no-sandbox` 手动参数（已内置）、自带全部依赖。
 
@@ -94,10 +81,12 @@ bash build-linglong.sh --skip-build
 | 应用文件 | `/opt/trae-solo-cn` | 沙箱 `/opt/apps/trae-solo-cn/files` |
 | 启动命令 | `/opt/trae-solo-cn/trae-solo-cn` | `ll-cli run trae-solo-cn` |
 
+- **窗口类隔离**：玲珑版启动时注入 `--class=trae-solo-cn-linglong`，任务栏图标各自归组，不与 deb 版混用。
 - **用户数据共用** `~/.config/TRAE SOLO CN`（登录、配置、扩展一致）。
 - **不要同时运行**两个版本：共用用户数据触发 Electron 单实例锁，后启动者会退出。
 - 如需同时对比，可给其中一个指定独立数据目录：
-  `ll-cli run trae-solo-cn -- --user-data-dir ~/.config/TRAE-SOLO-linglong-test`
+  `ll-cli run trae-solo-cn -- /opt/apps/trae-solo-cn/files/bin/trae-solo-cn --user-data-dir ~/.config/TRAE-SOLO-linglong-test`
+
 
 ## 功能状态（真实测试 2026-08-26）
 

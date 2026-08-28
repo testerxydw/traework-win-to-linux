@@ -10,6 +10,7 @@ deb-pkg/DEBIAN/md5sums
 
 # 构建输出的 deb 包（约 500MB/个）
 *.deb
+*.uab
 
 # 源材料（需自行下载）
 extracted/
