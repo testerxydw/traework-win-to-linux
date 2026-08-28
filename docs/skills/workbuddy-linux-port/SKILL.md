@@ -134,7 +134,12 @@ echo $?   # 139 = 段错误
 - 按 `process.versions.modules` 做 ABI 分流加载（改 `lib/database.js`）；
 - 但注意 **Electron 内嵌 Node 与同版本官方 Node 并非完全二进制兼容**，
   用官方 Node headers 编译的版本在 `RUN_AS_NODE` 下也可能崩溃（本例实测如此）。
-- 因此更务实：接受 daemon 功能降级，优先保证 GUI 可用。
+- **✅ 最终解法（实测有效）**：换用与 WorkBuddy 5.3.14 原生匹配的 **Electron 39.2.7**
+  运行时（借自社区移植版 `cn.workbuddy.otohime_5.3.14_amd64.deb`）后，
+  daemon 的 SIGSEGV 完全消失。原因：Electron 39 的 RUN_AS_NODE 与主进程 ABI 一致，
+  同一份 Linux 原生模块两个场景都能加载。
+- 结论：**优先选与原应用 ABI 匹配的 Electron 大版本**，不要跨大版本借运行时
+  （37→39 的 ABI 差异就会触发此坑）。
 
 ### 陷阱 3：腾讯私有包无法从 npm 获取
 
@@ -177,16 +182,29 @@ asar extract app.asar out/   # 可能报 unpacked 内某文件缺失
 
 ---
 
-## 实测结果（WorkBuddy 5.3.14 / deepin 25 / X11）
+## 实测结果（WorkBuddy 5.3.14 / deepin 25 / X11 / 最终版）
 
-- ✅ GUI 窗口正常显示（1200x800）、进程稳定、主框架 `CellJS` 完整初始化
-- ✅ 原生模块 better-sqlite3 / node-pty / koffi 加载正常
-- ✅ 平台适配逻辑自动识别 linux，正确使用系统 git/python/node
-  （日志：`PortableGit/node/python: skipped (platform linux not in [win32])`）
-- ⚠️ daemon 子进程 SIGSEGV → 依赖 daemon 的部分功能可用性待验证
-- ⚠️ 设备指纹（qimei）、微信消息解码等 Windows 专属能力缺失
+**最终方案**：官方 Windows `app.asar` + 社区移植版 **Electron 39.2.7** 运行时
++ 社区完整 Linux 原生模块（含 qimei-node 的 Linux 版）+ 启动脚本。
+
+- ✅ SIGSEGV = 0（daemon 正常，不再崩溃）
+- ✅ GUI 窗口正常（标题栏三键显示，`--title-bar-style=custom` 生效）
+- ✅ `CellJS container initialized`、**`signalStartupFirstPaint` 首帧绘制完成**（页面内容正常渲染，非空白）
+- ✅ 原生模块 better-sqlite3 / node-pty / koffi / qimei 加载正常
+- ✅ 遥测与配置下发正常（`publishResolvedConfiguration ... Connector: true`）
+- ✅ 平台识别 `workbuddy-linux-x64`、系统 git/python/node 自动使用
+- ⚠️ 微信消息解码（wechat-copydata-decoder）为 Windows 专属，缺失自动降级
 
 > 与社区结论一致：此类移植**部分功能可用**是正常预期。
+
+### 标题栏三键修复（重要）
+
+WorkBuddy 是自绘标题栏应用，Linux 下若三键不显示，启动时加：
+```bash
+--title-bar-style=custom
+```
+该参数让 WorkBuddy 自绘的标题栏（右上角最小化/最大化/关闭）正常显示。
+否则窗口 `_MOTIF_WM_HINTS` decorations=0 且无三键。
 
 ## 验证清单
 
