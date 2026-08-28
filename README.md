@@ -106,6 +106,7 @@ python3-yaml 等 apt 包，并 clone + 编译 innoextract ≥ 1.10（发行版�
 - [English README](README.en.md)
 - 设计文档: [docs/superpowers/specs/](docs/superpowers/specs/)
 - 实施计划: [docs/superpowers/plans/](docs/superpowers/plans/)
+- 拆包重打包技能手册（CodeBuddy 技能，含 symlink / main.js / 标题栏陷阱）: [docs/skills/traework-deb-repack/SKILL.md](docs/skills/traework-deb-repack/SKILL.md)
 
 ## 镜像仓库
 
