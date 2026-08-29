@@ -2,9 +2,11 @@
 Name=TRAE SOLO CN
 Comment=AI-powered code editor (Linux port)
 GenericName=Code Editor
+Keywords=code;editor;ai;ide;trae;development;
 Exec=/opt/trae-solo-cn/trae-solo-cn %F
 Icon=trae-solo-cn
 Type=Application
+Terminal=false
 StartupNotify=true
 StartupWMClass=trae-solo-cn
 Categories=Development;IDE;TextEditor;

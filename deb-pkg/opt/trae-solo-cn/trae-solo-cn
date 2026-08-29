@@ -1,0 +1,18 @@
+#!/bin/bash
+# TRAE SOLO CN - Linux Launcher
+# Repackaged from Windows installer with TraeCode CN Linux Electron runtime
+
+APP_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+ELECTRON="$APP_DIR/trae-solo-cn-bin"
+
+# 提升文件描述符上限，避免 File Watcher 出现 EMFILE: too many open files
+ulimit -n 65535 2>/dev/null || true
+
+# chrome-sandbox 需要 root:setuid 才能启用 Chromium 沙箱。postinst 会设置；
+# 若目标系统以 nosuid 挂载或 dpkg 解压时未生效，则自动追加 --no-sandbox，
+# 保证应用仍可启动（而不是白屏/闪退）。
+if [ ! -u "$APP_DIR/chrome-sandbox" ]; then
+    exec "$ELECTRON" --no-sandbox "$@"
+fi
+
+exec "$ELECTRON" "$@"
