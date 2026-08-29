@@ -309,6 +309,32 @@ PYEOF
     rsync -a "$TWAPP/node_modules/@byted-solo/" \
         "$RES_DIR/node_modules/@byted-solo/" 2>/dev/null || true
 
+    # ---------- 关键：应用身份 manifest.json ----------
+    # 位于应用根目录（与 TraeCode 的 /usr/share/trae-cn/manifest.json 同级）。
+    # 内含 appId / packageType / region / registryUrl（设备注册地址）/ ahaNet 网络参数。
+    # 缺失后果：ICubeDeviceRegister 拿不到 registryUrl 与 appId，设备无法注册
+    #   → 运行日志表现为 [ICDRS] did: 0（只有本地 ldid，没有服务端 deviceId）
+    #   → 服务端无该设备在线记录 → 手机端列表显示「打包版本」且离线、无法远程发消息。
+    # 必须取 TraeWork 的（appId 931506 / name "SOLO CN"），不能用 TraeCode 的
+    # （appId 787976 / name "Trae CN" / appVersion 3.3.91），否则身份错配。
+    if [[ -f "$TWROOT/manifest.json" ]]; then
+        cp -f "$TWROOT/manifest.json" "$APP_DIR/manifest.json"
+        step "  已复制 TraeWork manifest.json（appId/registryUrl，设备注册必需）"
+    else
+        echo "  [警告] 未找到 $TWROOT/manifest.json，设备注册将失败（手机端显示离线）"
+    fi
+
+    # ---------- 关键：内置扩展 extensions ----------
+    # 含 cloudide.icube-im-bridge（手机端消息桥接）、git/git-base、solo-lite、
+    # byted-solo.builtin-mcp 等。缺失会导致远程发消息等能力不可用。
+    # 用 TraeWork 自带的一套（与 product.json / solo-lite UI 配套），而非 TraeCode 的。
+    if [[ -d "$TWAPP/extensions" ]]; then
+        rsync -a --delete "$TWAPP/extensions/" "$RES_DIR/extensions/"
+        step "  已复制内置扩展 $(ls "$TWAPP/extensions" | wc -l) 个（含 icube-im-bridge）"
+    else
+        echo "  [警告] 未找到 $TWAPP/extensions，内置扩展缺失"
+    fi
+
     # 权限
     chmod 755 "$APP_DIR/trae-solo-cn-bin" "$APP_DIR/trae-solo-cn"
     chmod 755 "$APP_DIR/chrome-sandbox" 2>/dev/null || true
