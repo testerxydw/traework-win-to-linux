@@ -2,13 +2,20 @@
 # ============================================================================
 # TRAE SOLO CN 一键构建脚本（唯一入口）
 #
-# 流水线：拆包 Windows 安装包 → 组装 deb-pkg → 构建 deb → 转制玲珑 uab → 安装
+# 流水线：拆包 → [精简] → 桌面集成 → 构建 deb → 转制玲珑 uab → 安装
+#
+# 各阶段：
+#   1/5 拆包 + 组装 deb-pkg   2/5 精简（--slim）   3/5 桌面集成（图标/权限/桌面图标）
+#   4/5 构建 deb              5/5 玲珑 uab         最后安装
+# 桌面集成阶段负责生成图标、修正启动脚本权限（755）与注入桌面快捷方式创建逻辑，
+# 这些都必须作用于 deb-pkg 源目录，因此固定排在构建 deb 之前。
 #
 # 用法：
 #   bash build.sh                                # 完整流水线（自动查找目录下 TraeWork_CN-Setup*.exe）
 #   bash build.sh /path/TraeWork_CN-Setup-x64.exe  # 指定 Windows 安装包
 #   bash build.sh --extracted <解压目录>           # 复用已解压目录（.../code$GetDestDir）
 #   bash build.sh --skip-extract                 # 跳过拆包，复用现有 deb-pkg 直接构建
+#   bash build.sh --slim                         # 精简冗余文件（locales/ripgrep/fd musl 等，省约 58MB）
 #   bash build.sh --deb-only                     # 拆包 + 构建 deb + 安装 deb（不转玲珑）
 #   bash build.sh --ll-only                      # 仅用现有最新 deb 构建玲珑 + 安装玲珑
 #   bash build.sh --no-install                   # 全部构建但都不安装
@@ -74,6 +81,7 @@ install_deps() {
         "python3:python3" \
         "dpkg-deb:dpkg" \
         "python3-yaml:python3-yaml" \
+        "convert:imagemagick" \
         "ll-pica:linglong-pica" \
         "ll-builder:linglong-builder" \
         "ll-cli:linglong-bin"; do
@@ -135,12 +143,14 @@ DO_EXTRACT=1
 DO_DEB=1
 DO_LL=1
 DO_INSTALL=1
+DO_SLIM=0
 RUN_INSTALL_DEPS=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --extracted)   EXTRACTED_DIR="$2"; shift 2 ;;
         --skip-extract) DO_EXTRACT=0; shift ;;
+        --slim)        DO_SLIM=1; shift ;;
         --deb-only)    DO_LL=0; shift ;;
         --ll-only)     DO_EXTRACT=0; DO_DEB=0; shift ;;
         --no-install)  DO_INSTALL=0; shift ;;
@@ -170,10 +180,10 @@ find_innoextract() {
 }
 
 # ============================================================================
-# 阶段 1/4：拆包 + 组装 deb-pkg（原 setup.sh）
+# 阶段 1/5：拆包 + 组装 deb-pkg（原 setup.sh）
 # ============================================================================
 stage_extract() {
-    log "阶段 1/4：拆包 Windows 安装包并组装 deb-pkg"
+    log "阶段 1/5：拆包 Windows 安装包并组装 deb-pkg"
 
     # ---------- 定位 TraeWork 源目录 ----------
     local TWROOT=""
@@ -305,7 +315,161 @@ PYEOF
 }
 
 # ============================================================================
-# 阶段 2/4：构建 deb（原 build.sh）—— 结果写入全局 DEB_FILE
+# 阶段 2/5：精简冗余文件（--slim 时执行）
+#
+# 各项均已实测：删除后应用正常启动（ai-agent/ckg healthy、IPC ready、0 模块错误）
+#   - locales 55 个语言包只留 zh-CN/en-US：Chromium 标准优化，其余语言回退英文
+#   - @byted-fe/ripgrep-{linux-x64,linux-musl-x64}：未被引用。代码硬编码
+#     node_modules/@vscode/ripgrep/bin/rg（静态 ELF，自包含）；package.json 里的
+#     "@vscode/ripgrep":"npm:@byted-fe/ripgrep@1.7.4" 只是 alias，实际装的是
+#     microsoft 原版 1.17.0，其 bin/rg 已自带二进制
+#   - @byted-fe/fd-linux-musl-x64：glibc 系统只用 fd-linux-x64（按平台检测加载）
+#   - @byted-icube/trae-macos-native：macOS 专用
+#   - *.bat：Windows 遗留
+# 注意：两个 libsscronet.so（顶层与 ai-agent 内）MD5 不同，不是重复，不可删
+# ============================================================================
+stage_slim() {
+    log "阶段 2/5：精简冗余文件"
+    local BASE="${PKG_DIR}/opt/trae-solo-cn"
+    [[ -d "$BASE" ]] || die "未找到 ${BASE}，请先执行拆包阶段"
+
+    local before after
+    before="$(du -sm "$BASE" | cut -f1)"
+
+    find "$BASE/locales" -name '*.pak' ! -name 'zh-CN.pak' ! -name 'en-US.pak' -delete 2>/dev/null || true
+    rm -rf "${BASE}/resources/app/node_modules/@byted-fe/ripgrep-linux-x64"
+    rm -rf "${BASE}/resources/app/node_modules/@byted-fe/ripgrep-linux-musl-x64"
+    rm -rf "${BASE}/resources/app/node_modules/@byted-fe/fd-linux-musl-x64"
+    rm -rf "${BASE}/resources/app/node_modules/@byted-icube/trae-macos-native"
+    find "$BASE" -name '*.bat' -delete 2>/dev/null || true
+
+    after="$(du -sm "$BASE" | cut -f1)"
+    step "精简: ${before} MB -> ${after} MB (省 $((before-after)) MB)"
+}
+
+# ============================================================================
+# 阶段 3/5：桌面集成（图标 + 启动脚本权限 + 强制创建桌面图标）
+#
+# 解决的问题：
+#   1. 图标从未安装：.gitignore 忽略了 deb-pkg/usr/share/icons/，导致
+#      desktop 文件的 Icon=trae-solo-cn 解析不到，菜单显示问号
+#   2. 启动脚本无执行位：write_to_file 创建的是 664，而本脚本的 chmod 755
+#      在 stage_extract 内，用 --skip-extract 打包时会被跳过 → 菜单点击无反应
+#   3. 符号链接路径错误：/usr/bin/trae-solo-cn 是软链，用 dirname $0 会解析
+#      到 /usr/bin 而找不到 trae-solo-cn-bin → 改用 readlink -f
+# 本阶段幂等，可重复执行
+# ============================================================================
+stage_desktop() {
+    log "阶段 3/5：桌面集成（图标 / 权限 / 桌面图标）"
+    local ICON_SRC="${SCRIPT_DIR}/trae-icon-256.png"
+    local ICON_DIR="${PKG_DIR}/usr/share/icons/hicolor"
+    local DESKTOP_SRC="${PKG_DIR}/usr/share/applications/trae-solo-cn.desktop"
+    local POSTINST="${PKG_DIR}/DEBIAN/postinst"
+
+    [[ -d "${PKG_DIR}/opt" ]] || die "未找到 ${PKG_DIR}/opt，请先执行拆包阶段"
+
+    # ---------- 1. 生成多尺寸图标 ----------
+    step "生成图标 ..."
+    if [[ ! -f "$ICON_SRC" ]]; then
+        echo "  [警告] 缺少图标素材 $ICON_SRC，跳过图标生成（菜单将无图标）"
+    elif ! command -v convert >/dev/null 2>&1; then
+        echo "  [警告] 缺少 ImageMagick (convert)，跳过图标生成（apt install imagemagick）"
+    else
+        local size
+        for size in 16 32 48 64 128 256 512; do
+            mkdir -p "${ICON_DIR}/${size}x${size}/apps"
+            convert "$ICON_SRC" -resize "${size}x${size}" "${ICON_DIR}/${size}x${size}/apps/trae-solo-cn.png"
+        done
+        mkdir -p "${ICON_DIR}/scalable/apps"
+        cp -f "$ICON_SRC" "${ICON_DIR}/scalable/apps/trae-solo-cn.png"
+        step "  已生成 7 个尺寸 + scalable"
+    fi
+
+    # ---------- 2. 启动脚本：权限 + 软链 + sandbox 自动回退 ----------
+    step "修正启动脚本 ..."
+    cat > "${APP_DIR}/trae-solo-cn" << 'LAUNCHER'
+#!/bin/bash
+# TRAE SOLO CN - Linux Launcher
+# Repackaged from Windows installer with TraeCode CN Linux Electron runtime
+
+APP_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+ELECTRON="$APP_DIR/trae-solo-cn-bin"
+
+# 提升文件描述符上限，避免 File Watcher 出现 EMFILE: too many open files
+ulimit -n 65535 2>/dev/null || true
+
+# chrome-sandbox 需要 root:setuid 才能启用 Chromium 沙箱。postinst 会设置；
+# 若目标系统以 nosuid 挂载或 dpkg 解压时未生效，则自动追加 --no-sandbox，
+# 保证应用仍可启动（而不是白屏/闪退）。
+if [ ! -u "$APP_DIR/chrome-sandbox" ]; then
+    exec "$ELECTRON" --no-sandbox "$@"
+fi
+
+exec "$ELECTRON" "$@"
+LAUNCHER
+    chmod 755 "${APP_DIR}/trae-solo-cn"
+    chmod 755 "${APP_DIR}/trae-solo-cn-bin" 2>/dev/null || true
+    chmod 755 "${PKG_DIR}/usr/bin/trae-solo-cn" 2>/dev/null || true
+    step "  trae-solo-cn 已写入并 chmod 755"
+
+    # ---------- 3. 完善 desktop 文件 ----------
+    if [[ -f "$DESKTOP_SRC" ]]; then
+        grep -q '^Keywords=' "$DESKTOP_SRC" || \
+            sed -i '/^GenericName=/a Keywords=code;editor;ai;ide;trae;development;' "$DESKTOP_SRC"
+        grep -q '^Terminal=' "$DESKTOP_SRC" || \
+            sed -i '/^Type=/a Terminal=false' "$DESKTOP_SRC"
+        step "  desktop 文件已完善"
+    else
+        echo "  [警告] 未找到 $DESKTOP_SRC"
+    fi
+
+    # ---------- 4. postinst 注入「强制创建桌面快捷方式」 ----------
+    # 先移除旧注入块，保证重复构建不会重复追加
+    python3 - "$POSTINST" << 'PYEOF'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"\n# ---- BEGIN desktop-shortcut ----.*?# ---- END desktop-shortcut ----\n", "\n", s, flags=re.S)
+open(p, 'w').write(s)
+PYEOF
+
+    cat >> "$POSTINST" << 'POSTEOF'
+
+# ---- BEGIN desktop-shortcut ----
+# 强制为各用户创建桌面快捷方式（兼容 ~/Desktop 与中文 ~/桌面）
+SRC_DESKTOP=/usr/share/applications/trae-solo-cn.desktop
+if [ -f "$SRC_DESKTOP" ]; then
+    for home_dir in /root /home/*; do
+        [ -d "$home_dir" ] || continue
+        user_name="$(basename "$home_dir")"
+        for d in "$home_dir/Desktop" "$home_dir/桌面"; do
+            [ -d "$d" ] || continue
+            target="$d/trae-solo-cn.desktop"
+            if cp -f "$SRC_DESKTOP" "$target" 2>/dev/null; then
+                chmod 755 "$target" 2>/dev/null || true
+                # 属主设为该用户，否则普通用户无法「允许启动」
+                if [ "$user_name" != "root" ] && id -u "$user_name" >/dev/null 2>&1; then
+                    user_grp="$(id -gn "$user_name" 2>/dev/null || echo "$user_name")"
+                    chown "$user_name:$user_grp" "$target" 2>/dev/null || true
+                fi
+                # GNOME 需标记为可信才显示图标而非问号
+                if [ "$user_name" != "root" ] && command -v gio >/dev/null 2>&1; then
+                    sudo -u "$user_name" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$user_name")/bus" \
+                        gio set "$target" metadata::trusted true 2>/dev/null || true
+                fi
+                echo "已创建桌面图标: $target"
+            fi
+        done
+    done
+fi
+# ---- END desktop-shortcut ----
+POSTEOF
+    chmod 755 "$POSTINST"
+    step "  postinst 已注入桌面图标创建逻辑"
+}
+
+# ============================================================================
+# 阶段 4/5：构建 deb（原 build.sh）—— 结果写入全局 DEB_FILE
 # ============================================================================
 DEB_FILE=""
 
@@ -322,7 +486,7 @@ bump_version() {
 }
 
 stage_deb() {
-    log "阶段 2/4：构建 deb 包"
+    log "阶段 4/5：构建 deb 包"
     [[ -f "${CONTROL_FILE}" ]] || die "未找到 ${CONTROL_FILE}，请确认 deb-pkg/ 目录结构正确"
     [[ -d "${PKG_DIR}/opt" ]] || die "未找到 ${PKG_DIR}/opt，打包目录结构不完整"
 
@@ -369,12 +533,12 @@ locate_latest_deb() {
 }
 
 # ============================================================================
-# 阶段 3/4：转制玲珑 uab（原 build-linglong.sh）—— 结果写入全局 UAB
+# 阶段 5/5：转制玲珑 uab（原 build-linglong.sh）—— 结果写入全局 UAB
 # ============================================================================
 UAB=""
 
 stage_ll() {
-    log "阶段 3/4：转换玲珑 uab 包"
+    log "阶段 5/5：转换玲珑 uab 包"
     local tool
     for tool in ll-pica ll-builder ll-cli python3; do
         command -v "${tool}" >/dev/null 2>&1 || die "缺少必需命令: ${tool}（请安装 linglong-pica / linglong-builder / linglong-bin）"
@@ -447,10 +611,10 @@ PY
 }
 
 # ============================================================================
-# 阶段 4/4：安装
+# 安装（收尾，不属 5 个构建阶段）
 # ============================================================================
 stage_install() {
-    log "阶段 4/4：安装"
+    log "安装"
     if [[ "${DO_DEB}" -eq 1 ]]; then
         step "安装 deb 版 ..."
         sudo dpkg -i "${DEB_FILE}" 2>&1 | tail -n 3
@@ -469,7 +633,16 @@ stage_install() {
 if [[ "${DO_EXTRACT}" -eq 1 ]]; then
     stage_extract
 fi
+# 精简：--slim 时执行（作用于 deb-pkg，故必须在打包前）
+if [[ "${DO_SLIM}" -eq 1 ]]; then
+    stage_slim
+fi
+# 桌面集成：必须在 stage_deb 之前——stage_deb 只是打包，而图标生成、
+# 启动脚本 chmod 755 都作用于 deb-pkg 源目录；尤其 --skip-extract 时
+# stage_extract（含其 chmod）被跳过，若不在此修权限，打包出的启动脚本
+# 会是 644，导致菜单点击无反应
 if [[ "${DO_DEB}" -eq 1 ]]; then
+    stage_desktop
     stage_deb
 elif [[ "${DO_LL}" -eq 1 ]]; then
     locate_latest_deb

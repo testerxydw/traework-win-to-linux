@@ -20,3 +20,34 @@ fi
 
 echo "TRAE SOLO CN has been installed to /opt/trae-solo-cn/"
 echo "Run 'trae-solo-cn' from terminal or find it in your application menu."
+
+
+
+# ---- BEGIN desktop-shortcut ----
+# 强制为各用户创建桌面快捷方式（兼容 ~/Desktop 与中文 ~/桌面）
+SRC_DESKTOP=/usr/share/applications/trae-solo-cn.desktop
+if [ -f "$SRC_DESKTOP" ]; then
+    for home_dir in /root /home/*; do
+        [ -d "$home_dir" ] || continue
+        user_name="$(basename "$home_dir")"
+        for d in "$home_dir/Desktop" "$home_dir/桌面"; do
+            [ -d "$d" ] || continue
+            target="$d/trae-solo-cn.desktop"
+            if cp -f "$SRC_DESKTOP" "$target" 2>/dev/null; then
+                chmod 755 "$target" 2>/dev/null || true
+                # 属主设为该用户，否则普通用户无法「允许启动」
+                if [ "$user_name" != "root" ] && id -u "$user_name" >/dev/null 2>&1; then
+                    user_grp="$(id -gn "$user_name" 2>/dev/null || echo "$user_name")"
+                    chown "$user_name:$user_grp" "$target" 2>/dev/null || true
+                fi
+                # GNOME 需标记为可信才显示图标而非问号
+                if [ "$user_name" != "root" ] && command -v gio >/dev/null 2>&1; then
+                    sudo -u "$user_name" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$user_name")/bus" \
+                        gio set "$target" metadata::trusted true 2>/dev/null || true
+                fi
+                echo "已创建桌面图标: $target"
+            fi
+        done
+    done
+fi
+# ---- END desktop-shortcut ----
