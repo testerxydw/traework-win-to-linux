@@ -8,11 +8,21 @@ ELECTRON="$APP_DIR/trae-solo-cn-bin"
 # 提升文件描述符上限，避免 File Watcher 出现 EMFILE: too many open files
 ulimit -n 65535 2>/dev/null || true
 
+# 公共 Electron 参数：
+#   --disable-dev-shm-usage : DDE 下 /dev/shm 偏小，缺省会卡住渲染进程重绘，
+#                            表现为「work 模式 AI 流式输出不实时刷新、需切页才显示」。
+#   --title-bar-style=native: 强制使用系统（DDE）标题栏（双保险，main.js 补丁亦强制 native）。
+#   --disable-backgrounding-occluded-windows / --disable-renderer-backgrounding /
+#   --disable-background-timer-throttling : 禁用 DDE 下的窗口遮挡检测与后台节流，
+#                            避免渲染进程被误判为「被遮挡」而暂停重绘，导致 AI 流式输出
+#                            必须切页才刷新。
+EXTRA_ARGS="--disable-dev-shm-usage --title-bar-style=native --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling"
+
 # chrome-sandbox 需要 root:setuid 才能启用 Chromium 沙箱。postinst 会设置；
 # 若目标系统以 nosuid 挂载或 dpkg 解压时未生效，则自动追加 --no-sandbox，
 # 保证应用仍可启动（而不是白屏/闪退）。
 if [ ! -u "$APP_DIR/chrome-sandbox" ]; then
-    exec "$ELECTRON" --no-sandbox "$@"
+    exec "$ELECTRON" --no-sandbox ${EXTRA_ARGS} "$@"
 fi
 
-exec "$ELECTRON" "$@"
+exec "$ELECTRON" ${EXTRA_ARGS} "$@"

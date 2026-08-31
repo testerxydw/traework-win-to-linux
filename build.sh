@@ -276,16 +276,30 @@ stage_extract() {
 import sys
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
-c1 = 'function oW(t){if(rl)return"custom";'
+applied = []
+# 1) 标题栏样式解析函数（旧版 oW / 新版 hV 等）：Linux 强制 native。
+#    各版本 minify 函数名不同，逐个宽松匹配，命中即补，不命中不阻断。
+for pat in ['function oW(t){if(rl)return"custom";',
+            'function hV(t){if(cl)return"custom";']:
+    if pat in s:
+        # 在「return"custom"」前插入 Linux native 分支（Lt=isLinux / cl 为原生开关）
+        s = s.replace(pat, pat + 'if(Lt)return"native";', 1)
+        applied.append(pat[:20] + '...')
+# 2) titleBarOverlay 设置：Linux 跳过（双保险，避免白块遮挡）
 c2 = 'l.titleBarOverlay={height:29,color:p,symbolColor:b}'
-if s.count(c1) != 1 or s.count(c2) != 1:
+if c2 in s:
+    s = s.replace(c2, 'Lt||Object.assign(l,{titleBarOverlay:{height:29,color:p,symbolColor:b}})', 1)
+    applied.append('titleBarOverlay')
+# 3) 配置层：去掉对 window.titleBarStyle 的硬编码 custom，改为读取真实配置
+#    （fallback native）。否则渲染进程配置层始终返回 custom，DDE 下不显示系统标题栏。
+c3 = 'switch(i){case"window.titleBarStyle":return"custom"}'
+if c3 in s:
+    s = s.replace(c3, 'switch(i){case"window.titleBarStyle":return this.a.getValue("window.titleBarStyle",e,void 0)||"native"}', 1)
+    applied.append('config.custom->native')
+if not applied:
     sys.exit(1)
-# 1) 标题栏样式解析函数：Linux 强制 native（恢复 0.1.54 行为，Lt=isLinux）
-s = s.replace(c1, c1 + 'if(Lt)return"native";', 1)
-# 2) titleBarOverlay 设置：Linux 跳过（双保险）
-s = s.replace(c2, 'Lt||Object.assign(l,{titleBarOverlay:{height:29,color:p,symbolColor:b}})', 1)
 open(p, 'w').write(s)
-print("  main.js 已修补（Linux 强制 native 标题栏）")
+print("  main.js 已修补（命中: " + ", ".join(applied) + "）")
 PYEOF
 
     # product.json：复制后修改 buildPlatform 为 linux，并注入原生标题栏默认值
@@ -424,14 +438,24 @@ ELECTRON="$APP_DIR/trae-solo-cn-bin"
 # 提升文件描述符上限，避免 File Watcher 出现 EMFILE: too many open files
 ulimit -n 65535 2>/dev/null || true
 
+# 公共 Electron 参数：
+#   --disable-dev-shm-usage : DDE 下 /dev/shm 偏小，缺省会卡住渲染进程重绘，
+#                            表现为「work 模式 AI 流式输出不实时刷新、需切页才显示」。
+#   --title-bar-style=native: 强制使用系统（DDE）标题栏（双保险，main.js 补丁亦强制 native）。
+#   --disable-backgrounding-occluded-windows / --disable-renderer-backgrounding /
+#   --disable-background-timer-throttling : 禁用 DDE 下的窗口遮挡检测与后台节流，
+#                            避免渲染进程被误判为「被遮挡」而暂停重绘，导致 AI 流式输出
+#                            必须切页才刷新。
+EXTRA_ARGS="--disable-dev-shm-usage --title-bar-style=native --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling"
+
 # chrome-sandbox 需要 root:setuid 才能启用 Chromium 沙箱。postinst 会设置；
 # 若目标系统以 nosuid 挂载或 dpkg 解压时未生效，则自动追加 --no-sandbox，
 # 保证应用仍可启动（而不是白屏/闪退）。
 if [ ! -u "$APP_DIR/chrome-sandbox" ]; then
-    exec "$ELECTRON" --no-sandbox "$@"
+    exec "$ELECTRON" --no-sandbox ${EXTRA_ARGS} "$@"
 fi
 
-exec "$ELECTRON" "$@"
+exec "$ELECTRON" ${EXTRA_ARGS} "$@"
 LAUNCHER
     chmod 755 "${APP_DIR}/trae-solo-cn"
     chmod 755 "${APP_DIR}/trae-solo-cn-bin" 2>/dev/null || true
