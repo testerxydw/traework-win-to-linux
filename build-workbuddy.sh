@@ -6,11 +6,15 @@
 #
 # 用法：
 #   bash build-workbuddy.sh
-#       # 自动查找当前目录下的 WorkBuddy-win32-x64-user-*.exe 与
-#       # cn.workbuddy.otohime_*.deb（社区移植版，提供 Electron 39.2.7 运行时）
+#       # 自动查找项目根的 WorkBuddy-win32-x64-user-*.exe 与运行时：
+#       #   - 优先复用本地缓存 workbuddy-build/runtime-cache/（首次从社区 deb 解包后写入）
+#       #   - 否则用 cn.workbuddy.otohime_*.deb（社区移植版，提供 Electron 39.2.7 运行时）
 #   bash build-workbuddy.sh <Windows安装包.exe> <社区移植版.deb>
 #   bash build-workbuddy.sh --extracted <已解包的WorkBuddy目录> <社区移植版.deb>
 #       # 复用已解包的 WorkBuddy（含 resources/app.asar 与 app.asar.unpacked）
+#   bash build-workbuddy.sh --runtime <已缓存的运行时目录>
+#       # 直接指定已含 Electron 运行时（workbuddy-bin + app.asar.unpacked）的目录，
+#       # 完全跳过社区 deb 解包（离线/无 deb 时可用）
 #   bash build-workbuddy.sh --skip-extract
 #       # 跳过拆包，直接基于现有 wb_pkg 重新构建 deb（重算 md5sums/Installed-Size）
 #   bash build-workbuddy.sh --no-install
@@ -19,11 +23,14 @@
 #       # 仅安装构建所需系统依赖后退出
 #   bash build-workbuddy.sh -h | --help
 #
-# 源材料（需自行准备，置于项目根目录或显式指定）：
-#   1. WorkBuddy Windows 安装包（NSIS/7z 自解压，如 WorkBuddy-win32-x64-user-*.exe）
-#   2. 社区移植版 deb（cn.workbuddy.otohime_*.deb）—— 提供 **Electron 39.2.7** 运行时
+# 运行时（Electron 39.2.7）来源优先级：
+#   1. --runtime <dir>          显式指定的本地目录（含 workbuddy-bin 或 files/workbuddy）
+#   2. workbuddy-build/runtime-cache/   本地缓存（首次从社区 deb 解包后自动写入，后续复用）
+#   3. cn.workbuddy.otohime_*.deb       社区移植版 deb（置于项目根或显式指定）
 #      ★ 必须用此版本运行时：WorkBuddy 5.3.14 的原生模块 ABI 与 Electron 39 匹配；
 #        跨大版本（如 CodeBuddy 的 Electron 37）会导致 daemon 子进程 SIGSEGV。
+#   源材料 - WorkBuddy Windows 安装包（NSIS/7z 自解压，如 WorkBuddy-win32-x64-user-*.exe）
+#   也需置于项目根目录或显式指定。
 #
 # 产物：
 #   workbuddy_<版本>_amd64.deb  （如 workbuddy_5.3.14-1_amd64.deb）
@@ -102,6 +109,7 @@ install_deps() {
 # ---------- 参数解析 ----------
 WIN_EXE=""
 COMMUNITY_DEB=""
+RUNTIME_DIR=""          # 已含运行时（workbuddy-bin + app.asar.unpacked）的本地目录，跳过 deb 解包
 EXTRACTED_DIR=""
 DO_EXTRACT=1
 DO_INSTALL=1
@@ -110,6 +118,7 @@ RUN_INSTALL_DEPS=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --extracted)    EXTRACTED_DIR="$2"; shift 2 ;;
+        --runtime)      RUNTIME_DIR="$2"; shift 2 ;;
         --skip-extract) DO_EXTRACT=0; shift ;;
         --no-install)   DO_INSTALL=0; shift ;;
         --install-deps) RUN_INSTALL_DEPS=1; shift ;;
@@ -155,7 +164,8 @@ stage_extract() {
         [[ -n "$WIN_EXE" ]] || die "未找到 Windows 安装包（WorkBuddy-win32-x64-user-*.exe）"
         [[ -f "$WIN_EXE" ]] || die "安装包不存在: $WIN_EXE"
         local WB_EXTRACT="${ROOT_DIR}/wb_extract"
-        rm -rf "$WB_EXTRACT" && mkdir -p "$WB_EXTRACT"
+        # 不强制删除旧目录（避免大范围 rm 触发确认）；7z 解压会覆盖同名文件
+        mkdir -p "$WB_EXTRACT"
         step "解压 WorkBuddy 安装包 (NSIS 自解压, 7z) ..."
         7z x -y -o"$WB_EXTRACT" "$WIN_EXE" >/dev/null
         # NSIS 包结构：应用主体嵌套在 $PLUGINSDIR/app-64.7z 内，二次解压得到
@@ -177,19 +187,47 @@ stage_extract() {
     fi
     step "WorkBuddy 源: $WBSRC"
 
-    # ---------- 2. 拆包社区 deb（得到 Electron 39.2.7 运行时 + 完整原生模块） ----------
-    local COMM_EXTRACT="${ROOT_DIR}/community_extract"
-    rm -rf "$COMM_EXTRACT" && mkdir -p "$COMM_EXTRACT"
-    step "解包社区移植版 deb ..."
-    dpkg-deb -x "$COMMUNITY_DEB" "$COMM_EXTRACT" >/dev/null
+    # ---------- 2. 定位 Electron 运行时（Electron 39.2.7，社区移植版） ----------
+    # 来源优先级：
+    #   1) --runtime <dir>   显式指定已缓存的运行时目录（含 workbuddy-bin 或 files/workbuddy）
+    #   2) 本地缓存 ${ROOT_DIR}/runtime-cache/files/{workbuddy,resources/app.asar.unpacked}
+    #   3) 社区 deb（cn.workbuddy.otohime_*.deb），解包后写入 runtime-cache 复用
+    local RUNTIME_ROOT="" COMM_BIN COMM_UNPACKED
+    local RUNTIME_CACHE="${ROOT_DIR}/runtime-cache"
+    if [[ -n "$RUNTIME_DIR" ]]; then
+        [[ -d "$RUNTIME_DIR" ]] || die "指定的运行时目录不存在: $RUNTIME_DIR"
+        RUNTIME_ROOT="$RUNTIME_DIR"
+        step "使用显式指定的运行时目录: $RUNTIME_ROOT"
+    elif [[ -f "$RUNTIME_CACHE/files/workbuddy" || -f "$RUNTIME_CACHE/files/workbuddy-bin" ]]; then
+        RUNTIME_ROOT="$RUNTIME_CACHE/files"
+        step "复用本地运行时缓存: $RUNTIME_ROOT"
+    else
+        # 回退：解包社区 deb 并写入缓存
+        if [[ -z "$COMMUNITY_DEB" ]]; then
+            COMMUNITY_DEB="$(ls -t "${WORK_DIR}"/cn.workbuddy.otohime_*.deb 2>/dev/null | head -n 1 || true)"
+        fi
+        [[ -n "$COMMUNITY_DEB" ]] || die "未找到社区移植版 deb（cn.workbuddy.otohime_*.deb），请放置到 ${WORK_DIR}、用 --runtime 指定缓存目录，或用 --community 指定 deb"
+        [[ -f "$COMMUNITY_DEB" ]] || die "社区 deb 不存在: $COMMUNITY_DEB"
+        step "解包社区移植版 deb 并缓存到 runtime-cache ..."
+        local COMM_EXTRACT="${ROOT_DIR}/community_extract"
+        mkdir -p "$COMM_EXTRACT" "$RUNTIME_CACHE/files"
+        dpkg-deb -x "$COMMUNITY_DEB" "$COMM_EXTRACT" >/dev/null
+        local SRC_FILES
+        SRC_FILES="$(find "$COMM_EXTRACT" -type d -name 'files' -path '*opt/apps/*/files' 2>/dev/null | head -n 1)"
+        [[ -n "$SRC_FILES" ]] || SRC_FILES="$(find "$COMM_EXTRACT" -type d -name 'files' 2>/dev/null | head -n 1)"
+        [[ -n "$SRC_FILES" ]] || die "社区 deb 内未找到 files/ 目录"
+        # 同步进缓存（--delete 保证缓存与源一致），保留上次残留可安全覆盖
+        rsync -a --delete "$SRC_FILES/." "$RUNTIME_CACHE/files/"
+        rm -rf "$COMM_EXTRACT"
+        RUNTIME_ROOT="$RUNTIME_CACHE/files"
+        step "运行时已缓存至: $RUNTIME_ROOT"
+    fi
 
-    # 社区版结构为玲珑导出：运行时在 files/workbuddy，原生模块在
-    # files/resources/app.asar.unpacked/node_modules。
-    local COMM_BIN COMM_UNPACKED
-    COMM_BIN="$(find "$COMM_EXTRACT" -type f -name 'workbuddy' -path '*files/*' 2>/dev/null | head -n 1)"
-    COMM_UNPACKED="$(find "$COMM_EXTRACT" -type d -name 'app.asar.unpacked' -path '*files/resources/*' 2>/dev/null | head -n 1)"
-    [[ -n "$COMM_BIN" ]] || die "社区 deb 内未找到 files/workbuddy 运行时"
-    [[ -n "$COMM_UNPACKED" ]] || die "社区 deb 内未找到 files/resources/app.asar.unpacked"
+    # 从 RUNTIME_ROOT 定位运行时二进制与原生模块
+    COMM_BIN="$(find "$RUNTIME_ROOT" -type f \( -name 'workbuddy' -o -name 'workbuddy-bin' \) 2>/dev/null | head -n 1)"
+    COMM_UNPACKED="$(find "$RUNTIME_ROOT" -type d -name 'app.asar.unpacked' 2>/dev/null | head -n 1)"
+    [[ -n "$COMM_BIN" ]] || die "运行时目录内未找到 workbuddy 二进制（期望 files/workbuddy 或 files/workbuddy-bin）"
+    [[ -n "$COMM_UNPACKED" ]] || die "运行时目录内未找到 app.asar.unpacked（原生模块缺失）"
 
     # ---------- 3. 组装 wb_pkg ----------
     step "组装 wb_pkg ..."
@@ -236,10 +274,10 @@ LAUNCHER
     fi
     chmod 755 "$APP_DIR/workbuddy"
 
-    # 3f. desktop / 图标（优先复用社区版，其次 Windows 自带）
+    # 3f. desktop / 图标（优先复用运行时缓存，其次 Windows 源自带）
     local COMM_DESKTOP COMM_ICON WBSRC_ICON
-    COMM_DESKTOP="$(find "$COMM_EXTRACT" -name '*.desktop' 2>/dev/null | head -n 1)"
-    COMM_ICON="$(find "$COMM_EXTRACT" \( -name '*.png' -o -name '*.svg' \) 2>/dev/null | head -n 1)"
+    COMM_DESKTOP="$(find "$RUNTIME_ROOT" -name '*.desktop' 2>/dev/null | head -n 1)"
+    COMM_ICON="$(find "$RUNTIME_ROOT" \( -name '*.png' -o -name '*.svg' \) 2>/dev/null | head -n 1)"
     WBSRC_ICON="$WBSRC/resources/app.asar.unpacked/resources/icon.png"
     mkdir -p "$PKG_DIR/usr/share/applications" "$PKG_DIR/usr/share/icons/hicolor/256x256/apps"
     if [[ -n "$COMM_DESKTOP" ]]; then

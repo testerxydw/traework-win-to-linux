@@ -40,3 +40,7 @@ workbuddy-build/**/*.deb
 # 但保留构建脚本（拆包打包流程，可复用）
 !workbuddy-build/scripts/
 !workbuddy-build/scripts/**/*.sh
+
+# WorkBuddy 运行时缓存（解包自社区 deb，约 200M+）
+workbuddy-build/runtime-cache/
+workbuddy-build/wb_extract/
