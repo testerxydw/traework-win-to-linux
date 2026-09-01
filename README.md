@@ -115,6 +115,13 @@ python3-yaml 等 apt 包，并 clone + 编译 innoextract ≥ 1.10（发行版�
 
 ## 下载
 
-- **WorkBuddy 5.3.14-4**（Linux 移植版，Electron 39.2.7；修复退出后进程残留、托盘右键菜单、桌面图标为纯 WorkBuddy logo）：
-  GitHub Release → https://github.com/testerxydw/traework-win-to-linux/releases/tag/workbuddy-5.3.14-4
+- **WorkBuddy 5.3.14-4**（Linux 移植版，Electron 39.2.7；修复退出后进程残留、托盘右键菜单、桌面图标为纯 WorkBuddy logo）
+  - GitHub Release（单文件，推荐）：https://github.com/testerxydw/traework-win-to-linux/releases/tag/workbuddy-5.3.14-4
+  - Gitee Release（分卷：因 Gitee 单文件限 ~100MB，拆为 `.00`/`.01`/`.02` 三卷，下载后合并）：
+    https://gitee.com/xiyidaiwa/traework-win-to-linux/releases/tag/workbuddy-5.3.14-4
+    ```bash
+    cat workbuddy_5.3.14-4_amd64.deb.0* > workbuddy_5.3.14-4_amd64.deb
+    md5sum workbuddy_5.3.14-4_amd64.deb   # 应为 a25753d060e4543944156dcf7a73a948
+    sudo dpkg -i workbuddy_5.3.14-4_amd64.deb
+    ```
 - 历史版本见各 `workbuddy-*` tag 的 Release 附件
