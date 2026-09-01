@@ -21,6 +21,9 @@
 #       # 构建但不安装
 #   bash build-workbuddy.sh --install-deps
 #       # 仅安装构建所需系统依赖后退出
+#   bash build-workbuddy.sh --patch-asar /opt/workbuddy/resources/app.asar
+#       # 只对指定的 app.asar 打「进程回收」补丁后退出（修复退出后进程残留），
+#       # 用于免重新构建直接修复已安装的 WorkBuddy
 #   bash build-workbuddy.sh -h | --help
 #
 # 运行时（Electron 39.2.7）来源优先级：
@@ -114,11 +117,13 @@ EXTRACTED_DIR=""
 DO_EXTRACT=1
 DO_INSTALL=1
 RUN_INSTALL_DEPS=0
+PATCH_ASAR_FILE=""      # --patch-asar <file>：只对该 app.asar 打进程回收补丁后退出
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --extracted)    EXTRACTED_DIR="$2"; shift 2 ;;
         --runtime)      RUNTIME_DIR="$2"; shift 2 ;;
+        --patch-asar)   PATCH_ASAR_FILE="$2"; shift 2 ;;
         --skip-extract) DO_EXTRACT=0; shift ;;
         --no-install)   DO_INSTALL=0; shift ;;
         --install-deps) RUN_INSTALL_DEPS=1; shift ;;
@@ -134,10 +139,46 @@ if [[ "${RUN_INSTALL_DEPS}" -eq 1 ]]; then
     exit 0
 fi
 
+
+
 # ---------- 依赖检查 ----------
 for tool in rsync python3 dpkg-deb sed grep md5sum chmod 7z; do
     command -v "$tool" >/dev/null 2>&1 || die "缺少依赖: $tool（可运行 bash $0 --install-deps 自动安装）"
 done
+
+# ---------- app.asar 进程回收补丁（修复「退出后进程残留」） ----------
+# Linux 无 Windows Job Object，主进程退出后 daemon / zygote / detached prewarm 池
+# 会变孤儿。补丁让 daemon 感知宿主失联（stdin 关闭 / stdout EPIPE）后主动停池退出。
+#
+# 采用 asar 内原地替换（不整体解包/重打包）：asar 中标记为 unpacked 的文件落在
+# app.asar.unpacked/ 而非 asar 数据区，原地替换不会触碰它们，可避免 re-pack 导致
+# unpacked 标记丢失；同时已安装环境常缺部分 unpacked 文件，整体 extract 会直接失败。
+# 详见 scripts/patch_daemon_lifecycle.py 头部说明。
+PATCH_SCRIPT="${ROOT_DIR}/scripts/patch_daemon_lifecycle.py"
+PATCH_TRAY_SCRIPT="${ROOT_DIR}/scripts/patch-tray-linux.py"
+
+patch_app_asar() {
+    local asar_file="$1"
+    [[ -f "$asar_file" ]] || die "未找到 app.asar: $asar_file"
+
+    # 进程回收补丁（退出后 daemon/zygote/prewarm 残留）
+    if [[ -f "$PATCH_SCRIPT" ]]; then
+        step "应用 app.asar 进程回收补丁 ..."
+        python3 "$PATCH_SCRIPT" "$asar_file" \
+            || die "app.asar 进程回收补丁失败（官方代码结构可能已变化，需人工复核）"
+    else
+        step "跳过进程回收补丁：缺少 $PATCH_SCRIPT"
+    fi
+
+    # 托盘右键菜单补丁（Linux/AppIndicator 需 setContextMenu 才暴露 DBusMenu）
+    if [[ -f "$PATCH_TRAY_SCRIPT" ]]; then
+        step "应用 app.asar 托盘右键菜单补丁 ..."
+        python3 "$PATCH_TRAY_SCRIPT" "$asar_file" \
+            || die "app.asar 托盘补丁失败（官方代码结构可能已变化，需人工复核）"
+    else
+        step "跳过托盘补丁：缺少 $PATCH_TRAY_SCRIPT"
+    fi
+}
 
 # ============================================================================
 # 阶段 1/N：拆包 + 组装 wb_pkg
@@ -258,20 +299,87 @@ stage_extract() {
         rsync -a --delete "$COMM_UNPACKED/" "$RES_DIR/app.asar.unpacked/"
     fi
 
-    # 3e. 启动脚本（已内建 --title-bar-style=custom 与 --no-sandbox 逻辑）
-    if [[ ! -f "$APP_DIR/workbuddy" ]]; then
-        cat > "$APP_DIR/workbuddy" <<'LAUNCHER'
+    # 3e. 启动脚本（孤儿进程清理 + --title-bar-style=custom + --no-sandbox 逻辑）
+    #     每次构建都覆盖写入：清理逻辑需要随修复同步更新到已安装环境。
+    cat > "$APP_DIR/workbuddy" <<'LAUNCHER'
 #!/usr/bin/env bash
 # WorkBuddy for Linux 启动脚本
 set -euo pipefail
+
 APP_DIR="/opt/workbuddy"
 ELECTRON="${APP_DIR}/workbuddy-bin"
+
 [[ -x "${ELECTRON}" ]] || { echo "错误：未找到 Electron 运行时 ${ELECTRON}" >&2; exit 1; }
+
+# ---- 残留进程清理 ----------------------------------------------------------
+# Linux 没有 Windows 的 Job Object，主进程非正常退出时其子进程（Chromium zygote /
+# network service、daemon、sidecar、以 detached 方式 spawn 的 prewarm 池）会被
+# reparent 成孤儿，持续占用内存并刷 write EPIPE 日志。
+#
+# 判据：沿 PPID 祖先链找不到任何「活着的 browser 主进程」的子服务进程即为孤儿。
+#   - 归属判定用 /proc/<pid>/exe：Chromium 子进程 argv[0] 是 /proc/self/exe，
+#     命令行里不含 APP_DIR，只 grep 命令行会漏掉 network service 等；
+#   - 主进程自身（无 --type、无 app.asar 入口）不匹配子服务特征，不会被误杀；
+#   - 正在运行的实例，其子进程祖先链上有真实主进程，不匹配；
+#   - crashpad handler 的 exe 是 chrome_crashpad_handler，不在归属范围内。
+# 循环多轮是为了清掉「daemon 被杀 → sidecar / prewarm 变孤儿」的级联。
+workbuddy_cleanup_orphans() {
+    declare -A _wb_probe 2>/dev/null || return 0   # 需要 bash 4+ 关联数组
+    local pid ppid cmd exe cur nxt orphans killed round i k orphan
+    local -a cand_pid=() cand_cmd=()
+    local -A ppid_of=() is_main=()
+
+    while read -r pid ppid cmd; do
+        [[ -n "${pid}" && -n "${ppid}" ]] || continue
+        exe="$(readlink "/proc/${pid}/exe" 2>/dev/null)" || continue
+        [[ "${exe}" == "${APP_DIR}/workbuddy-bin" ]] || continue
+        cand_pid+=("${pid}")
+        cand_cmd+=("${cmd}")
+        ppid_of["${pid}"]="${ppid}"
+        if [[ "${cmd}" != *--type=* && "${cmd}" != *app.asar* ]]; then
+            is_main["${pid}"]=1
+        fi
+    done < <(ps -eo pid=,ppid=,args= --no-headers 2>/dev/null)
+
+    for round in 1 2 3; do
+        orphans=""
+        for ((i = 0; i < ${#cand_pid[@]}; i++)); do
+            pid="${cand_pid[i]}"
+            cmd="${cand_cmd[i]}"
+            case "${cmd}" in
+                *--type=*|*daemon-app-server-entry.js*|*sidecar-entry.js*|*--prewarm*) ;;
+                *) continue ;;
+            esac
+            kill -0 "${pid}" 2>/dev/null || continue
+            cur="${pid}"
+            orphan=1
+            for ((k = 0; k < 32; k++)); do
+                [[ -n "${is_main[${cur}]:-}" ]] && { orphan=0; break; }
+                nxt="${ppid_of[${cur}]:-}"
+                [[ -z "${nxt}" || "${nxt}" == "0" || "${nxt}" == "${cur}" ]] && break
+                cur="${nxt}"
+            done
+            [[ "${orphan}" -eq 1 ]] && orphans+=" ${pid}"
+        done
+        [[ -z "${orphans}" ]] && break
+        killed=0
+        for pid in ${orphans}; do
+            kill -9 "${pid}" 2>/dev/null && killed=$((killed + 1)) || true
+        done
+        [[ "${killed}" -eq 0 ]] && break
+        sleep 0.2
+    done
+}
+workbuddy_cleanup_orphans
+
+# Linux 下 Chromium 沙箱常因内核限制无法使用，默认以 --no-sandbox 启动。
+# 如需启用沙箱，设置环境变量 WORKBUDDY_ENABLE_SANDBOX=1。
 SANDBOX_ARG="--no-sandbox"
 [[ "${WORKBUDDY_ENABLE_SANDBOX:-0}" == "1" ]] && SANDBOX_ARG=""
+
+# --title-bar-style=custom：让 WorkBuddy 自绘标题栏（右上角三键）正常显示
 exec "${ELECTRON}" ${SANDBOX_ARG:+$SANDBOX_ARG} --disable-dev-shm-usage --title-bar-style=custom "$@"
 LAUNCHER
-    fi
     chmod 755 "$APP_DIR/workbuddy"
 
     # 3f. desktop / 图标（优先复用运行时缓存，其次 Windows 源自带）
@@ -283,10 +391,13 @@ LAUNCHER
     if [[ -n "$COMM_DESKTOP" ]]; then
         cp -f "$COMM_DESKTOP" "$PKG_DIR/usr/share/applications/workbuddy.desktop"
     fi
-    if [[ -n "$COMM_ICON" ]]; then
-        cp -f "$COMM_ICON" "$PKG_DIR/usr/share/icons/hicolor/256x256/apps/workbuddy.png" 2>/dev/null || true
-    elif [[ -f "$WBSRC_ICON" ]]; then
+    # 图标：优先使用 Windows 源 app.asar.unpacked 里的纯 WorkBuddy logo
+    # （通常 1024x1024 方形 PNG，桌面缩放无锯齿），fallback 才用 RUNTIME_ROOT
+    # 下的图标（社区版含"中国移动 | WorkBuddy"横幅 867x250，不符合桌面图标预期）
+    if [[ -f "$WBSRC_ICON" ]]; then
         cp -f "$WBSRC_ICON" "$PKG_DIR/usr/share/icons/hicolor/256x256/apps/workbuddy.png"
+    elif [[ -n "$COMM_ICON" ]]; then
+        cp -f "$COMM_ICON" "$PKG_DIR/usr/share/icons/hicolor/256x256/apps/workbuddy.png" 2>/dev/null || true
     fi
     # desktop 中 Exec 统一指向 /usr/bin/workbuddy（postinst 建 symlink）
     if [[ -f "$PKG_DIR/usr/share/applications/workbuddy.desktop" ]]; then
@@ -428,9 +539,19 @@ stage_install() {
 # ============================================================================
 # 主流程
 # ============================================================================
+if [[ -n "${PATCH_ASAR_FILE}" ]]; then
+    log "仅打补丁（进程回收修复）：${PATCH_ASAR_FILE}"
+    patch_app_asar "${PATCH_ASAR_FILE}"
+    step "完成。重启 WorkBuddy 后生效"
+    exit 0
+fi
+
 if [[ "${DO_EXTRACT}" -eq 1 ]]; then
     stage_extract
 fi
+# 进程回收补丁放在拆包之后独立执行：--skip-extract 复用旧 wb_pkg 时同样生效，
+# 且补丁幂等，重复执行无害。
+patch_app_asar "$RES_DIR/app.asar"
 stage_deb
 if [[ "${DO_INSTALL}" -eq 1 ]]; then
     stage_install

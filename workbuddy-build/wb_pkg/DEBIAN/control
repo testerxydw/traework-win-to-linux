@@ -1,6 +1,6 @@
 Package: workbuddy
-Version: 5.3.14-1
-Installed-Size: 929740
+Version: 5.3.14-4
+Installed-Size: 937084
 Section: utils
 Priority: optional
 Architecture: amd64
