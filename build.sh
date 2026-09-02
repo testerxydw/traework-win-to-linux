@@ -15,10 +15,11 @@
 #   bash build.sh /path/TraeWork_CN-Setup-x64.exe  # 指定 Windows 安装包
 #   bash build.sh --extracted <解压目录>           # 复用已解压目录（.../code$GetDestDir）
 #   bash build.sh --skip-extract                 # 跳过拆包，复用现有 deb-pkg 直接构建
-#   bash build.sh                                # 默认即精简（删跨平台残留 darwin/win32/msvc/musl/arm64 + 媒体 + strip 未剥离符号），省约 200-300MB
+#   bash build.sh                                # 默认：拆包 + 精简 + 构建 deb（不构建玲珑），省约 200-300MB
 #   bash build.sh --no-slim                      # 关闭默认精简（保留全平台残留与未 strip 符号，体积最大）
-#   bash build.sh --deb-only                     # 拆包 + 构建 deb + 安装 deb（不转玲珑）
-#   bash build.sh --ll-only                      # 仅用现有最新 deb 构建玲珑 + 安装玲珑
+#   bash build.sh --deb-only                     # 仅 deb（不转玲珑），兼容旧用法，等价于默认
+#   bash build.sh --ll                           # 在默认基础上额外构建并打包玲珑
+#   bash build.sh --ll-only                      # 仅用现有最新 deb 构建玲珑 + 安装玲珑（不拆包/不构建 deb）
 #   bash build.sh --no-install                   # 全部构建但都不安装
 #   bash build.sh --install-deps                 # 一键安装构建所需的全部依赖工具后退出
 #
@@ -142,7 +143,7 @@ WIN_EXE=""
 EXTRACTED_DIR=""
 DO_EXTRACT=1
 DO_DEB=1
-DO_LL=1
+DO_LL=0
 DO_INSTALL=1
 DO_SLIM=1
 RUN_INSTALL_DEPS=0
@@ -154,7 +155,8 @@ while [[ $# -gt 0 ]]; do
         --slim)        DO_SLIM=1; shift ;;
         --no-slim)     DO_SLIM=0; shift ;;
         --deb-only)    DO_LL=0; shift ;;
-        --ll-only)     DO_EXTRACT=0; DO_DEB=0; shift ;;
+        --ll)          DO_LL=1; shift ;;
+        --ll-only)     DO_EXTRACT=0; DO_DEB=0; DO_LL=1; shift ;;
         --no-install)  DO_INSTALL=0; shift ;;
         --install-deps) RUN_INSTALL_DEPS=1; shift ;;
         -h|--help)     usage ;;
@@ -525,7 +527,7 @@ LAUNCHER
 import re, sys
 p = sys.argv[1]
 s = open(p).read()
-s = re.sub(r"\n# ---- BEGIN desktop-shortcut ----.*?# ---- END desktop-shortcut ----\n", "\n", s, flags=re.S)
+s = re.sub(r"\n+# ---- BEGIN desktop-shortcut ----.*?# ---- END desktop-shortcut ----\n+", "\n", s, flags=re.S)
 open(p, 'w').write(s)
 PYEOF
 
@@ -586,12 +588,28 @@ stage_deb() {
     [[ -f "${CONTROL_FILE}" ]] || die "未找到 ${CONTROL_FILE}，请确认 deb-pkg/ 目录结构正确"
     [[ -d "${PKG_DIR}/opt" ]] || die "未找到 ${PKG_DIR}/opt，打包目录结构不完整"
 
-    local old_version new_version
+    local old_version new_version mver old_base
     old_version="$(grep -E '^Version: ' "${CONTROL_FILE}" | head -n 1 | sed -E 's/^Version:[[:space:]]+//')"
     [[ -n "${old_version}" ]] || die "无法解析 ${CONTROL_FILE} 的 Version"
-    new_version="$(bump_version "${old_version}")"
+
+    # 版本同步：以 TraeWork manifest.json 的 appVersion 为真实应用版本，
+    # 避免 control 长期写死、与安装包脱节（旧版曾固定 0.1.58 一路错标）。
+    # 同 appVersion 仅自增修订号；安装包升级（appVersion 变化）则重置为 -1。
+    mver=""
+    if [[ -f "${APP_DIR}/manifest.json" ]]; then
+        mver="$(grep -o '"appVersion"\s*:\s*"[^"]*"' "${APP_DIR}/manifest.json" \
+                | head -n1 | sed -E 's/.*"appVersion"\s*:\s*"([^"]*)".*/\1/')"
+    fi
+    old_base="${old_version%%-*}"
+    if [[ -n "${mver}" && "${old_base}" == "${mver}" ]]; then
+        new_version="$(bump_version "${old_version}")"
+    elif [[ -n "${mver}" ]]; then
+        new_version="${mver}-1"
+    else
+        new_version="$(bump_version "${old_version}")"
+    fi
     sed -i "s/^Version: .*/Version: ${new_version}/" "${CONTROL_FILE}"
-    step "版本: ${old_version} -> ${new_version}"
+    step "版本: ${old_version} -> ${new_version}${mver:+ (manifest.appVersion=${mver})}"
 
     # 重算 Installed-Size（单位 KiB，排除 DEBIAN 元数据）：手写值会随内容增删而过期，
     # 导致系统「应用管理」显示体积失真（实测虚标 1.6G vs 磁盘实际 1.2G）

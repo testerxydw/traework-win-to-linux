@@ -6,7 +6,8 @@ description: "TraeWork CN（TRAE SOLO）Windows 安装包拆包并重新打包�
 # TraeWork CN → Linux deb 拆包重打包技能
 
 本技能固化 TraeWork CN（TRAE SOLO，VS Code 1.107.1 内核 fork）从 Windows 安装包
-拆包、植入 Linux Electron 运行时、修复标题栏、重新打包为 deb（及玲珑 uab）的完整流程，
+拆包、植入 Linux Electron 运行时、修复标题栏、重新打包为 deb（默认）的完整流程，
+玲珑 uab 为可选项（需 `build.sh --ll`）。
 并重点记录一系列**只有踩过坑才知道的陷阱**。
 
 > ⚠️ 非官方移植，仅供学习交流，版权归原开发方（ByteDance）所有。
@@ -22,7 +23,7 @@ description: "TraeWork CN（TRAE SOLO）Windows 安装包拆包并重新打包�
 ## 目录约定（本项目）
 
 ```
-build.sh                            # 唯一构建入口（拆包→deb→玲珑→安装），本技能是其补充
+build.sh                            # 唯一构建入口（默认拆包→精简→deb→安装；玲珑需 --ll），本技能是其补充
 deb-pkg/                            # 打包根目录（最终 dpkg-deb --build 的对象）
   DEBIAN/                          # control / postinst / prerm / postrm / md5sums
   opt/trae-solo-cn/                # 真实安装内容（启动脚本、Electron 二进制、resources/app）
@@ -42,7 +43,7 @@ deb-pkg/                            # 打包根目录（最终 dpkg-deb --build 
 ### 步骤 1 — 解包现有 deb
 
 ```bash
-SRC_DEB=trae-solo-cn_0.1.58-6_amd64.deb
+SRC_DEB=trae-solo-cn_0.1.61-1_amd64.deb   # 以实际产物为准
 WORK=/tmp/trae_extract
 rm -rf "$WORK" && mkdir -p "$WORK"/{data,ctrl}
 dpkg-deb -x "$SRC_DEB" "$WORK/data"     # 解数据文件
@@ -84,6 +85,22 @@ dpkg-deb --build --root-owner-group "$WORK/data" out.deb
 dpkg-deb -I out.deb    # 看 control / md5sums
 dpkg-deb -c out.deb    # 看文件列表
 ```
+
+---
+
+## 版本号同步（重要，曾长期脱节）
+
+`deb-pkg/DEBIAN/control` 的 `Version` **不再写死**，每次 `build.sh` 阶段 4（构建 deb）
+从 `opt/trae-solo-cn/manifest.json` 的 `appVersion` 字段同步：
+
+- `appVersion`（如 `0.1.61`）才是 TRAE SOLO 的真实**发布版本**，由 `stage_extract`
+  从 TraeWork 安装包复制进 `deb-pkg`。
+- `product.json` 的 `version`（如 `1.107.1`）是 VS Code **内核版本体系**，**不是**
+  solo 发布版本，严禁用作 deb 版本号。
+- 同步规则：同 `appVersion` 仅自增修订号（`0.1.61-1` → `-2` …）；安装包升级致
+  `appVersion` 变化则重置为 `-1`。
+- 手工二次打包时，务必把 `control` 的 `Version` 改成与 `manifest.json` 的
+  `appVersion` 一致，否则版本标示与安装包脱节（旧版曾固定 `0.1.58` 一路错标）。
 
 ---
 
@@ -164,7 +181,7 @@ l.titleBarOverlay={height:29,color:p,symbolColor:b}
 
 ## 关联
 
-- 主流程：`build.sh`（拆包→deb→玲珑→安装一键入口）
+- 主流程：`build.sh`（默认拆包→deb→安装；`--ll` 加玲珑、`--no-install` 跳过安装）
 - 玲珑适配：`scripts/fix-linglong-yaml.py`
 - 设计文档：`docs/superpowers/specs/`、`docs/superpowers/plans/`
 - 功能清单：`README-功能说明.md`
