@@ -21,8 +21,6 @@ fi
 echo "TRAE SOLO CN has been installed to /opt/trae-solo-cn/"
 echo "Run 'trae-solo-cn' from terminal or find it in your application menu."
 
-
-
 # ---- BEGIN desktop-shortcut ----
 # 强制为各用户创建桌面快捷方式（兼容 ~/Desktop 与中文 ~/桌面）
 SRC_DESKTOP=/usr/share/applications/trae-solo-cn.desktop
