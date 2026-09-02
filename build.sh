@@ -5,7 +5,7 @@
 # 流水线：拆包 → [精简] → 桌面集成 → 构建 deb → 转制玲珑 uab → 安装
 #
 # 各阶段：
-#   1/5 拆包 + 组装 deb-pkg   2/5 精简（--slim）   3/5 桌面集成（图标/权限/桌面图标）
+#   1/5 拆包 + 组装 deb-pkg   2/5 精简（默认开启，--no-slim 关闭）   3/5 桌面集成（图标/权限/桌面图标）
 #   4/5 构建 deb              5/5 玲珑 uab         最后安装
 # 桌面集成阶段负责生成图标、修正启动脚本权限（755）与注入桌面快捷方式创建逻辑，
 # 这些都必须作用于 deb-pkg 源目录，因此固定排在构建 deb 之前。
@@ -15,7 +15,8 @@
 #   bash build.sh /path/TraeWork_CN-Setup-x64.exe  # 指定 Windows 安装包
 #   bash build.sh --extracted <解压目录>           # 复用已解压目录（.../code$GetDestDir）
 #   bash build.sh --skip-extract                 # 跳过拆包，复用现有 deb-pkg 直接构建
-#   bash build.sh --slim                         # 精简冗余文件（locales/ripgrep/fd musl 等，省约 58MB）
+#   bash build.sh                                # 默认即精简（删跨平台残留 darwin/win32/msvc/musl/arm64 + 媒体 + strip 未剥离符号），省约 200-300MB
+#   bash build.sh --no-slim                      # 关闭默认精简（保留全平台残留与未 strip 符号，体积最大）
 #   bash build.sh --deb-only                     # 拆包 + 构建 deb + 安装 deb（不转玲珑）
 #   bash build.sh --ll-only                      # 仅用现有最新 deb 构建玲珑 + 安装玲珑
 #   bash build.sh --no-install                   # 全部构建但都不安装
@@ -143,7 +144,7 @@ DO_EXTRACT=1
 DO_DEB=1
 DO_LL=1
 DO_INSTALL=1
-DO_SLIM=0
+DO_SLIM=1
 RUN_INSTALL_DEPS=0
 
 while [[ $# -gt 0 ]]; do
@@ -151,6 +152,7 @@ while [[ $# -gt 0 ]]; do
         --extracted)   EXTRACTED_DIR="$2"; shift 2 ;;
         --skip-extract) DO_EXTRACT=0; shift ;;
         --slim)        DO_SLIM=1; shift ;;
+        --no-slim)     DO_SLIM=0; shift ;;
         --deb-only)    DO_LL=0; shift ;;
         --ll-only)     DO_EXTRACT=0; DO_DEB=0; shift ;;
         --no-install)  DO_INSTALL=0; shift ;;
@@ -355,18 +357,21 @@ PYEOF
 }
 
 # ============================================================================
-# 阶段 2/5：精简冗余文件（--slim 时执行）
+# 阶段 2/5：精简冗余文件（默认执行，--no-slim 关闭）
 #
 # 各项均已实测：删除后应用正常启动（ai-agent/ckg healthy、IPC ready、0 模块错误）
 #   - locales 55 个语言包只留 zh-CN/en-US：Chromium 标准优化，其余语言回退英文
-#   - @byted-fe/ripgrep-{linux-x64,linux-musl-x64}：未被引用。代码硬编码
-#     node_modules/@vscode/ripgrep/bin/rg（静态 ELF，自包含）；package.json 里的
-#     "@vscode/ripgrep":"npm:@byted-fe/ripgrep@1.7.4" 只是 alias，实际装的是
-#     microsoft 原版 1.17.0，其 bin/rg 已自带二进制
+#   - @byted-fe/ripgrep-{linux-x64,linux-musl-x64}：未被引用（代码硬编码 @vscode/ripgrep/bin/rg）
 #   - @byted-fe/fd-linux-musl-x64：glibc 系统只用 fd-linux-x64（按平台检测加载）
 #   - @byted-icube/trae-macos-native：macOS 专用
+#   - Windows 残留（零风险删）：*.dll / *.exe / *win32-x64* / *.msvc.node /
+#     node-v*-win-*.zip / windows.node / foreground_love.node / koffi-win32-x64。
+#     打包脚本把全平台 build 产物塞进 deb，这些 Linux 永不加载。
 #   - *.bat：Windows 遗留
-# 注意：两个 libsscronet.so（顶层与 ai-agent 内）MD5 不同，不是重复，不可删
+#   - strip 未剥离的 .so / .node / 主二进制：仅去符号表（--strip-unneeded），
+#     功能无损；实测 libai_agent.so 256MB 未 strip 是最大瘦身点。
+# 注意：两个 libsscronet.so（顶层与 ai-agent 内）MD5 不同，不是重复，不可删；
+#       但两者均未 strip，本阶段会一并 strip。
 # ============================================================================
 stage_slim() {
     log "阶段 2/5：精简冗余文件"
@@ -382,6 +387,47 @@ stage_slim() {
     rm -rf "${BASE}/resources/app/node_modules/@byted-fe/fd-linux-musl-x64"
     rm -rf "${BASE}/resources/app/node_modules/@byted-icube/trae-macos-native"
     find "$BASE" -name '*.bat' -delete 2>/dev/null || true
+
+    # ---------- Windows / macOS 平台残留（Linux 用不到，零风险删除） ----------
+    # 全平台 build 产物被打包脚本一股脑塞进 deb：Windows 的 node 运行时 zip、
+    # skia 原生模块、computer-use 的 exe/dll、win 版 koffi 等。按文件名特征清理。
+    find "$BASE" \( -name '*.dll' -o -name '*.exe' \) -delete 2>/dev/null || true
+    find "$BASE" -name '*win32-x64*' -delete 2>/dev/null || true
+    find "$BASE" -name '*.msvc.node' -delete 2>/dev/null || true
+    find "$BASE" -name 'node-v*-win-*.zip' -delete 2>/dev/null || true
+    find "$BASE" -name 'windows.node' -delete 2>/dev/null || true
+    find "$BASE" -name 'foreground_love.node' -delete 2>/dev/null || true
+    find "$BASE" -path '*trae-macos-native*' -delete 2>/dev/null || true
+
+    # ---------- 参考 workbuddy 移植经验：系统性跨平台 / 跨架构 / 媒体清理 ----------
+    # trae 与 workbuddy 同源（Electron 应用），全平台 build 产物同样被一股脑塞进 deb。
+    # 以下路径在 Linux x64 运行时绝不加载，零风险删除；媒体为演示/引导资源，非功能必需。
+    # macOS 调试符号与框架
+    find "$BASE" -name '*.dSYM'      -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$BASE" -name '*.framework' -prune -exec rm -rf {} + 2>/dev/null || true
+    # 跨平台 / 跨架构残留：darwin / win32 / msvc / musl / 非 x64（Linux x64 永不加载）
+    find "$BASE" -path '*darwin-x64*'   -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$BASE" -path '*darwin-arm64*' -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$BASE" -path '*win32*'        -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$BASE" -path '*msvc*'         -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$BASE" -path '*linux-musl*'   -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$BASE" -path '*linux-arm64*'  -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$BASE" -path '*linux-armhf*'  -prune -exec rm -rf {} + 2>/dev/null || true
+    # 非功能媒体（演示视频 / 引导动画）：不影响启动与 AI 能力（实测约 47MB）
+    find "$BASE" \( -name '*.mp4' -o -name '*.mov' -o -name '*.webm' \
+        -o -name '*.avi' -o -name '*.mkv' -o -name '*.gif' \) -delete 2>/dev/null || true
+
+    # ---------- strip 未剥离的二进制（仅去符号表，功能无损，体积大减） ----------
+    # 实测 libai_agent.so 256MB 含 .symtab，strip 后显著缩小；已 stripped 的文件重 strip 无副作用。
+    if command -v strip >/dev/null 2>&1; then
+        find "$BASE" -type f \( -name '*.so' -o -name '*.so.*' -o -name '*.node' \) \
+            -exec sh -c 'file "$1" 2>/dev/null | grep -q "ELF" && strip --strip-unneeded "$1" 2>/dev/null' _ {} \;
+        [[ -f "$BASE/trae-solo-cn-bin" ]] && file "$BASE/trae-solo-cn-bin" 2>/dev/null | grep -q "ELF" && \
+            strip --strip-unneeded "$BASE/trae-solo-cn-bin" 2>/dev/null || true
+        step "  已 strip 未剥离的 ELF 符号"
+    else
+        echo "  [警告] 缺少 strip 命令（binutils），跳过符号剥离，体积优化减弱"
+    fi
 
     after="$(du -sm "$BASE" | cut -f1)"
     step "精简: ${before} MB -> ${after} MB (省 $((before-after)) MB)"
