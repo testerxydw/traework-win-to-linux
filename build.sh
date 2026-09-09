@@ -277,23 +277,40 @@ stage_extract() {
     # 未来版本失效时降级为警告，不阻断构建。
     step "修补 main.js titleBarOverlay Linux 守卫 ..."
     python3 - "$RES_DIR/out/main.js" << 'PYEOF' || echo "  [警告] main.js 未命中已知模式，跳过（若 Linux 出现白块需人工适配）"
-import sys
+import sys, re
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 applied = []
-# 1) 标题栏样式解析函数（旧版 oW / 新版 hV 等）：Linux 强制 native。
-#    各版本 minify 函数名不同，逐个宽松匹配，命中即补，不命中不阻断。
-for pat in ['function oW(t){if(rl)return"custom";',
-            'function hV(t){if(cl)return"custom";']:
-    if pat in s:
-        # 在「return"custom"」前插入 Linux native 分支（Lt=isLinux / cl 为原生开关）
-        s = s.replace(pat, pat + 'if(Lt)return"native";', 1)
-        applied.append(pat[:20] + '...')
-# 2) titleBarOverlay 设置：Linux 跳过（双保险，避免白块遮挡）
+
+# 0) 动态探测 isLinux 变量名：各版本 minify 命名不同（0.1.58/61=Lt，0.1.63=Qf），
+#    常量簇形如 Jh=Eo.platform==="win32",Kh=Eo.platform==="darwin",Qf=Eo.platform==="linux"。
+#    写死变量名会在下个版本静默失效（0.1.63 中 Lt 已变成别的字符串，导致补丁②恒跳过）。
+m = re.search(r'([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\.platform==="linux"', s)
+is_linux = m.group(1) if m else ''
+
+# 1) 标题栏样式解析函数：形如 `function X(t){if(Y)return"custom";const e=t.getValue("window")`，
+#    0.1.58=oW / 0.1.61=hV / 0.1.63=bV，函数名随版本变化，用通用正则（实测全文件唯一）。
+#    在「return"custom"」前插入 Linux native 分支，否则主进程强制 custom + frame:false，
+#    且无 titleBarOverlay → updateWindowControls 抛 "Titlebar overlay is not enabled"，窗口起不来。
+m = re.search(r'(function ([A-Za-z_$][\w$]*)\(t\)\{if\([A-Za-z_$][\w$]*\)return"custom";)(const e=t\.getValue\("window"\))', s)
+if m and is_linux:
+    # 插入点必须在 return"custom"; 的分号之后（原文 const e 前无分号，直接在尾部插会语法错误）
+    ins = m.group(1) + 'if(%s)return"native";' % is_linux + m.group(3)
+    s = s[:m.start()] + ins + s[m.end():]
+    applied.append('titlebar-style->native(%s,%s)' % (m.group(2), is_linux))
+
+# 2) titleBarOverlay 设置：Linux 跳过（双保险，避免白块遮挡）。
+#    兼容两种形态：原始 minify 代码，以及旧版补丁写死 Lt 的产物（本批 0.1.63 修复）。
+repl2 = ('%s||Object.assign(l,{titleBarOverlay:{height:29,color:p,symbolColor:b}})' % is_linux) if is_linux else None
 c2 = 'l.titleBarOverlay={height:29,color:p,symbolColor:b}'
-if c2 in s:
-    s = s.replace(c2, 'Lt||Object.assign(l,{titleBarOverlay:{height:29,color:p,symbolColor:b}})', 1)
+if c2 in s and repl2:
+    s = s.replace(c2, repl2, 1)
     applied.append('titleBarOverlay')
+old2 = 'Lt||Object.assign(l,{titleBarOverlay:{height:29,color:p,symbolColor:b}})'
+if old2 in s and repl2 and old2 != repl2:
+    s = s.replace(old2, repl2, 1)
+    applied.append('titleBarOverlay(修正写死Lt)')
+
 # 3) 配置层：去掉对 window.titleBarStyle 的硬编码 custom，改为读取真实配置
 #    （fallback native）。否则渲染进程配置层始终返回 custom，DDE 下不显示系统标题栏。
 c3 = 'switch(i){case"window.titleBarStyle":return"custom"}'
