@@ -438,8 +438,10 @@ stage_slim() {
 
     # ---------- strip 未剥离的二进制（仅去符号表，功能无损，体积大减） ----------
     # 实测 libai_agent.so 256MB 含 .symtab，strip 后显著缩小；已 stripped 的文件重 strip 无副作用。
+    # 匹配规则：*.so* / *.node 之外，还要覆盖无后缀的裸 ELF 可执行文件（实测 trae-sandbox
+    # 23MB 未 strip 被旧规则漏掉）——用「可执行位或库/模块后缀」圈定候选，再由 file 确认 ELF。
     if command -v strip >/dev/null 2>&1; then
-        find "$BASE" -type f \( -name '*.so' -o -name '*.so.*' -o -name '*.node' \) \
+        find "$BASE" -type f \( -perm -u+x -o -name '*.so' -o -name '*.so.*' -o -name '*.node' \) \
             -exec sh -c 'file "$1" 2>/dev/null | grep -q "ELF" && strip --strip-unneeded "$1" 2>/dev/null' _ {} \;
         [[ -f "$BASE/trae-solo-cn-bin" ]] && file "$BASE/trae-solo-cn-bin" 2>/dev/null | grep -q "ELF" && \
             strip --strip-unneeded "$BASE/trae-solo-cn-bin" 2>/dev/null || true

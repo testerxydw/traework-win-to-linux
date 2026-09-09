@@ -1,9 +1,9 @@
 Package: trae-solo-cn
-Version: 0.1.63-2
+Version: 0.1.63-3
 Section: editors
 Priority: optional
 Architecture: amd64
-Installed-Size: 1012992
+Installed-Size: 983252
 Maintainer: TraeWork CN Linux Packager <noreply@trae.com.cn>
 Description: TRAE SOLO CN - AI-powered code editor (Linux port)
  TraeWork CN is an AI-powered code editor based on VS Code,

@@ -34,6 +34,17 @@
 - `scripts/patch-tray-linux.py`：Linux/AppIndicator 下补 setContextMenu 经 DBusMenu 暴露菜单，修「托盘右键菜单不显示」。
 - launcher `workbuddy`（heredoc 写入 wb_pkg）：孤儿进程清理 + --title-bar-style=custom + 默认 --no-sandbox。
 
+## trae build.sh main.js 标题栏补丁（0.1.63 修复，2026-09-09）
+- **禁写死 minify 变量/函数名**：isLinux（Lt→Qf）、解析函数（oW→hV→bV）每版都变。
+  已改为动态探测：isLinux 用 `X=Eo.platform==="linux"` 正则；解析函数用
+  `function X(t){if(Y)return"custom";const e=t.getValue("window")` 通用正则（全文件唯一）。
+- **插入点必须在 `return"custom";` 分号后**：在 `const e=t.getValue("window")` 尾部插会
+  `SyntaxError: Unexpected token 'if'`（原文此处无分号，ASI 救不了）。
+- 0.1.63 打不开根因即补丁①未命中（无 overlay + frame:false → "Titlebar overlay is not enabled"）
+  + 补丁②产物写死 `Lt||` 而 Lt 变成恒真字符串。修复版见 build.sh stage_extract。
+- **0.1.63 官方原版在 Linux 能正常开窗**（自绘标题栏，同 Windows 套路），但用户目视确认
+  DDE 上仍有白块/异常 → **补丁继续保留**（强制 native）。官方 `forceNativeTitlebar` 仅辅助窗口用。
+
 ## 发布约定
 - tag 命名：`workbuddy-<版本>`（无 v 前缀，如 `workbuddy-5.3.14-4`）。
 - GitHub：`gh release create` 上传单文件（276MB，GitHub 限制 2GB，OK）。
