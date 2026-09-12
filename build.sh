@@ -371,7 +371,10 @@ PYEOF
     fi
 
     # 权限
-    chmod 755 "$APP_DIR/trae-solo-cn-bin" "$APP_DIR/trae-solo-cn"
+    # 注：启动脚本 $APP_DIR/trae-solo-cn 在阶段 3 (stage_desktop) 才生成，此处可能尚不存在，
+    # 用 || true 容忍；其 755 权限由阶段 3 统一设置。
+    chmod 755 "$APP_DIR/trae-solo-cn-bin" 2>/dev/null || true
+    chmod 755 "$APP_DIR/trae-solo-cn" 2>/dev/null || true
     chmod 755 "$APP_DIR/chrome-sandbox" 2>/dev/null || true
 }
 
@@ -464,8 +467,130 @@ stage_slim() {
 #      在 stage_extract 内，用 --skip-extract 打包时会被跳过 → 菜单点击无反应
 #   3. 符号链接路径错误：/usr/bin/trae-solo-cn 是软链，用 dirname $0 会解析
 #      到 /usr/bin 而找不到 trae-solo-cn-bin → 改用 readlink -f
+#   4. 打包元数据缺失：deb-pkg 为纯构建产物（不纳入版本控制，见 commit ad81296），
+#      control/postinst/prerm/postrm/desktop/usr/bin 软链必须由脚本生成；
+#      曾因 prerm/postrm 不存在导致 chmod 报错 + set -e 直接中断打包。
 # 本阶段幂等，可重复执行
 # ============================================================================
+
+# ---------- 补齐 deb 打包元数据（仅在缺失时生成，不覆盖已有内容）----------
+ensure_deb_meta() {
+    mkdir -p "${PKG_DIR}/DEBIAN" "${PKG_DIR}/usr/bin" "${PKG_DIR}/usr/share/applications"
+
+    # control：版本基准取 TraeWork manifest.json 的 appVersion（stage_deb 再自增修订号）
+    if [[ ! -f "${CONTROL_FILE}" ]]; then
+        local mver=""
+        if [[ -f "${APP_DIR}/manifest.json" ]]; then
+            mver="$(grep -o '"appVersion"\s*:\s*"[^"]*"' "${APP_DIR}/manifest.json" \
+                    | head -n1 | sed -E 's/.*"appVersion"\s*:\s*"([^"]*)".*/\1/')"
+        fi
+        cat > "${CONTROL_FILE}" <<EOF
+Package: trae-solo-cn
+Version: ${mver:-0.1.0}
+Architecture: amd64
+Maintainer: TRAE SOLO CN Repack <repack@example.com>
+Depends: libc6 (>= 2.28), libstdc++6 (>= 9), libasound2 (>= 1.0.2), libatk-bridge2.0-0 (>= 2.5.3), libatk1.0-0 (>= 2.2.0), libcups2 (>= 1.6.1), libdbus-1-3 (>= 1.9.14), libdrm2 (>= 2.4.60), libgbm1 (>= 17.0.0), libgtk-3-0 (>= 3.24.0), libnss3 (>= 2:3.26), libxkbcommon0 (>= 0.5.0), libxss1 (>= 1.0.0), libxtst6 (>= 1.0.0), xdg-utils (>= 1.0)
+Section: utils
+Priority: optional
+Installed-Size: 0
+Description: TRAE SOLO CN (Linux repack)
+ Non-official repack of TraeWork CN for Linux. All rights belong to ByteDance.
+EOF
+        step "  已生成 DEBIAN/control（Version=${mver:-0.1.0}）"
+    fi
+
+    # postinst：基础体（安装后刷新 desktop/图标缓存）；桌面快捷方式块由下方第 4 步追加
+    if [[ ! -f "${PKG_DIR}/DEBIAN/postinst" ]]; then
+        cat > "${PKG_DIR}/DEBIAN/postinst" << 'POSTINST_EOF'
+#!/bin/bash
+set -e
+
+# 更新桌面数据库与图标缓存（安装后）
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f /usr/share/icons/hicolor || true
+fi
+POSTINST_EOF
+        step "  已生成 DEBIAN/postinst"
+    fi
+
+    # prerm：卸载前刷新桌面/图标缓存
+    if [[ ! -f "${PKG_DIR}/DEBIAN/prerm" ]]; then
+        cat > "${PKG_DIR}/DEBIAN/prerm" << 'PRERM_EOF'
+#!/bin/sh
+set -e
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications/ 2>/dev/null || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q /usr/share/icons/hicolor/ 2>/dev/null || true
+fi
+PRERM_EOF
+        step "  已生成 DEBIAN/prerm"
+    fi
+
+    # postrm：purge 时清理用户配置，并刷新缓存（与 postinst 对称）
+    if [[ ! -f "${PKG_DIR}/DEBIAN/postrm" ]]; then
+        cat > "${PKG_DIR}/DEBIAN/postrm" << 'POSTRM_EOF'
+#!/bin/sh
+set -e
+
+# 严格 purge 时清理用户配置（remove 阶段保留，方便重装后恢复）
+if [ "$1" = "purge" ]; then
+    rm -rf /home/*/.config/"TRAE SOLO CN" 2>/dev/null || true
+    rm -rf /home/*/.cache/"TRAE SOLO CN" 2>/dev/null || true
+fi
+
+# 刷新桌面数据库与图标缓存（与 postinst 对称）
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications/ 2>/dev/null || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q /usr/share/icons/hicolor/ 2>/dev/null || true
+fi
+
+exit 0
+POSTRM_EOF
+        step "  已生成 DEBIAN/postrm"
+    fi
+
+    # 桌面入口文件（菜单项）；已含 Keywords/Terminal，下方第 3 步的 sed 补全变为空操作
+    local DESKTOP="${PKG_DIR}/usr/share/applications/trae-solo-cn.desktop"
+    if [[ ! -f "${DESKTOP}" ]]; then
+        cat > "${DESKTOP}" << 'DESKTOP_EOF'
+[Desktop Entry]
+Name=TRAE SOLO CN
+Comment=AI-powered code editor (Linux port)
+GenericName=Code Editor
+Keywords=code;editor;ai;ide;trae;development;
+Exec=/opt/trae-solo-cn/trae-solo-cn %F
+Icon=trae-solo-cn
+Type=Application
+Terminal=false
+StartupNotify=true
+StartupWMClass=trae-solo-cn
+Categories=Development;IDE;TextEditor;
+MimeType=text/plain;inode/directory;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=/opt/trae-solo-cn/trae-solo-cn --new-window %F
+Icon=trae-solo-cn
+DESKTOP_EOF
+        step "  已生成 desktop 文件"
+    fi
+
+    # /usr/bin 命令软链（终端可直接执行 trae-solo-cn）
+    if [[ ! -e "${PKG_DIR}/usr/bin/trae-solo-cn" ]]; then
+        ln -sf /opt/trae-solo-cn/trae-solo-cn "${PKG_DIR}/usr/bin/trae-solo-cn"
+        step "  已创建 /usr/bin/trae-solo-cn -> /opt/trae-solo-cn/trae-solo-cn"
+    fi
+}
+
 stage_desktop() {
     log "阶段 3/5：桌面集成（图标 / 权限 / 桌面图标）"
     local ICON_SRC="${SCRIPT_DIR}/trae-icon-256.png"
@@ -474,6 +599,10 @@ stage_desktop() {
     local POSTINST="${PKG_DIR}/DEBIAN/postinst"
 
     [[ -d "${PKG_DIR}/opt" ]] || die "未找到 ${PKG_DIR}/opt，请先执行拆包阶段"
+
+    # ---------- 0. 补齐 deb 打包元数据 ----------
+    step "补齐打包元数据 ..."
+    ensure_deb_meta
 
     # ---------- 1. 生成多尺寸图标 ----------
     step "生成图标 ..."
@@ -641,8 +770,15 @@ stage_deb() {
     fi
     step "Installed-Size 重算: ${installed_size} KiB ($(awk -v k="${installed_size}" 'BEGIN{printf "%.2f GiB", k/1024/1024}'))"
 
-    # 维护脚本权限
-    chmod 755 "${PKG_DIR}/DEBIAN/postinst" "${PKG_DIR}/DEBIAN/prerm" "${PKG_DIR}/DEBIAN/postrm"
+    # 维护脚本权限（逐个判断存在性：缺失时不再因 set -e 中断打包）
+    local mf
+    for mf in postinst prerm postrm; do
+        if [[ -f "${PKG_DIR}/DEBIAN/${mf}" ]]; then
+            chmod 755 "${PKG_DIR}/DEBIAN/${mf}"
+        else
+            echo "  [警告] 缺少 DEBIAN/${mf}，已跳过权限设置"
+        fi
+    done
 
     # 递归生成数据文件 md5sums（排除 DEBIAN 元数据目录，路径去掉 ./ 前缀）
     : > "${PKG_DIR}/DEBIAN/md5sums"

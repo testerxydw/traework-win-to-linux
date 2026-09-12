@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+# 严格 purge 时清理用户配置（remove 阶段保留，方便重装后恢复）
+if [ "$1" = "purge" ]; then
+    rm -rf /home/*/.config/"TRAE SOLO CN" 2>/dev/null || true
+    rm -rf /home/*/.cache/"TRAE SOLO CN" 2>/dev/null || true
+fi
+
+# 刷新桌面数据库与图标缓存（与 postinst 对称）
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications/ 2>/dev/null || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q /usr/share/icons/hicolor/ 2>/dev/null || true
+fi
+
+exit 0
