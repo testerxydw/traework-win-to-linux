@@ -605,20 +605,35 @@ stage_desktop() {
     ensure_deb_meta
 
     # ---------- 1. 生成多尺寸图标 ----------
+    # 缩放工具按可用性回退：ImageMagick(convert) → ImageMagick 7(magick) → ffmpeg → 原图复制
+    # 注意：本机若只装了 imagemagick-7-common（只有配置、无主程序）则没有 convert，
+    #       旧实现会整段跳过 → deb 里零图标（已实测 trae-solo-cn_0.1.67-1 的 share/icons 为 0）。
     step "生成图标 ..."
+    local RESIZE_TOOL=""
+    if command -v convert >/dev/null 2>&1; then
+        RESIZE_TOOL="convert"
+    elif command -v magick >/dev/null 2>&1; then
+        RESIZE_TOOL="magick"
+    elif command -v ffmpeg >/dev/null 2>&1; then
+        RESIZE_TOOL="ffmpeg"
+    fi
     if [[ ! -f "$ICON_SRC" ]]; then
         echo "  [警告] 缺少图标素材 $ICON_SRC，跳过图标生成（菜单将无图标）"
-    elif ! command -v convert >/dev/null 2>&1; then
-        echo "  [警告] 缺少 ImageMagick (convert)，跳过图标生成（apt install imagemagick）"
     else
-        local size
+        local size out
         for size in 16 32 48 64 128 256 512; do
             mkdir -p "${ICON_DIR}/${size}x${size}/apps"
-            convert "$ICON_SRC" -resize "${size}x${size}" "${ICON_DIR}/${size}x${size}/apps/trae-solo-cn.png"
+            out="${ICON_DIR}/${size}x${size}/apps/trae-solo-cn.png"
+            case "$RESIZE_TOOL" in
+                convert) convert "$ICON_SRC" -resize "${size}x${size}" "$out" ;;
+                magick)  magick  "$ICON_SRC" -resize "${size}x${size}" "$out" ;;
+                ffmpeg)  ffmpeg -y -loglevel error -i "$ICON_SRC" -vf "scale=${size}:${size}" "$out" ;;
+                *)       cp -f "$ICON_SRC" "$out" ;;   # 兜底：原图复制（尺寸不精确但图标可用）
+            esac
         done
         mkdir -p "${ICON_DIR}/scalable/apps"
         cp -f "$ICON_SRC" "${ICON_DIR}/scalable/apps/trae-solo-cn.png"
-        step "  已生成 7 个尺寸 + scalable"
+        step "  已生成 7 个尺寸 + scalable（缩放工具: ${RESIZE_TOOL:-直接复制}）"
     fi
 
     # ---------- 2. 启动脚本：权限 + 软链 + sandbox 自动回退 ----------
