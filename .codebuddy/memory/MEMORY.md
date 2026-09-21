@@ -63,6 +63,13 @@
 - 外部源：① `WorkBuddy-win32-x64-user-*.exe` → app.asar 前端 + icon.png；② 社区版 deb（或 runtime-cache/files）→ Electron 运行时 + 原生模块 + desktop。
 - 运行时来源优先级：`--runtime` > `workbuddy-build/runtime-cache/files/` > `cn.workbuddy.otohime_*.deb`。
 
+### 图标生成（多工具回退，2026-09-21，commit ab7f975）
+- 本机**没有** ImageMagick 主程序（只有 `imagemagick-7-common` 配置包），`convert` / `magick` 均缺失；
+  `rsvg-convert` 只支持 SVG，PIL 未装。
+- `build.sh` 图标段已改为按可用性回退：`convert` → `magick` → **`ffmpeg`** → 原图复制兜底，
+  并打印实际使用的工具；旧版无任何兜底，会**整段跳过**导致 deb 零图标（`share/icons` = 0）。
+- 想用标准工具可 `sudo apt install -y imagemagick`；不装也能出图（本机走 ffmpeg 真缩放）。
+
 ### 已固化修复（app.asar 内原地替换，不重打包）
 - `scripts/patch_daemon_lifecycle.py`：daemon 感知宿主失联（stdin 关/EPIPE）后主动停池退出（修退出后进程残留）。
 - `scripts/patch-tray-linux.py`：Linux/AppIndicator 下补 setContextMenu 经 DBusMenu 暴露（修托盘右键菜单不显示）。
