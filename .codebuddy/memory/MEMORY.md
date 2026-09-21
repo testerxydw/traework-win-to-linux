@@ -78,3 +78,18 @@
 ## 发布约定
 - GitHub：`gh release create` 单文件（~276MB，限制 2GB）。
 - Gitee：单文件附件限 ~100MB，须 `split -b 90M` 分卷；建 release API **必填 `target_commitish`**（=master），否则 400；需 access_token。
+
+## URL scheme 注册（MCP 的 OAuth 回跳）—— 2026-09-21，commit `97d6754`
+- `product.json` 的 `urlProtocol = "solo-cn"`（**不是** `trae-cn`，官方 trae-cn 用另一个 scheme）。
+- 注册**三要素缺一不可**：
+  1. `usr/share/applications/trae-solo-cn-url-handler.desktop`：`MimeType=x-scheme-handler/solo-cn;`、
+     `Exec=/opt/trae-solo-cn/trae-solo-cn --open-url %U`、`NoDisplay=true`；
+     命名必须是 **`<desktop 名>-url-handler.desktop`**（与官方 `code-url-handler.desktop` /
+     `buddycn-url-handler.desktop` / `trae-cn-url-handler.desktop` 同款）。
+  2. launcher 里 **`export CHROME_DESKTOP=trae-solo-cn-url-handler.desktop`** ——
+     Chromium 靠该变量取 desktop 文件名，缺失时 Linux 下 `setAsDefaultProtocolClient` **静默返回 false**；
+     官方 VS Code 的 `bin/code` 里有同款一行。
+  3. postinst 幂等写各用户 `~/.config/mimeapps.list` 的 `x-scheme-handler/solo-cn=` 作兜底。
+- **验收命令**：`gio mime x-scheme-handler/solo-cn` 或 `xdg-mime query default x-scheme-handler/solo-cn`
+  → 应输出 `trae-solo-cn-url-handler.desktop`。
+- 判断"某版本是否已修复"必须用 `dpkg.log` 的安装时刻切分日志时间戳，否则会把修复前的崩溃日志误读为现状。
