@@ -427,14 +427,20 @@ stage_slim() {
     # macOS 调试符号与框架
     find "$BASE" -name '*.dSYM'      -prune -exec rm -rf {} + 2>/dev/null || true
     find "$BASE" -name '*.framework' -prune -exec rm -rf {} + 2>/dev/null || true
-    # 跨平台 / 跨架构残留：darwin / win32 / msvc / musl / 非 x64（Linux x64 永不加载）
-    find "$BASE" -path '*darwin-x64*'   -prune -exec rm -rf {} + 2>/dev/null || true
-    find "$BASE" -path '*darwin-arm64*' -prune -exec rm -rf {} + 2>/dev/null || true
-    find "$BASE" -path '*win32*'        -prune -exec rm -rf {} + 2>/dev/null || true
-    find "$BASE" -path '*msvc*'         -prune -exec rm -rf {} + 2>/dev/null || true
-    find "$BASE" -path '*linux-musl*'   -prune -exec rm -rf {} + 2>/dev/null || true
-    find "$BASE" -path '*linux-arm64*'  -prune -exec rm -rf {} + 2>/dev/null || true
-    find "$BASE" -path '*linux-armhf*'  -prune -exec rm -rf {} + 2>/dev/null || true
+    # 跨平台 / 跨架构残留（Linux x64 永不加载）—— ⚠️ 必须限定 -type d（只删【目录】）
+    #
+    # 血泪教训（2026-09-21）：原先用 `-path '*win32*'` 匹配【任意路径】，
+    # 会误删【跨平台 Node 代码】而非平台二进制，典型受害者：
+    #   node_modules/which/node_modules/isexe/dist/cjs/win32.js
+    #   （isexe/dist/cjs/index.js 第 32 行 `require("./win32.js")`，按平台动态加载）
+    # 后果：扩展宿主启动即 `MODULE_NOT_FOUND` → exit code 1 → 扩展/MCP 全部崩溃
+    # （UI 报「扩展进程崩溃或已退出」，MCP 三服务永远"已关闭"）。
+    # 故这里只删「目录名」带平台后缀的预编译产物目录（如 prebuilds/win32-x64、darwin-x64），
+    # 绝不碰同名 *.js / *.json 文件；平台相关的【文件】删除见上方按扩展名的精确规则。
+    find "$BASE" -type d \( -name 'darwin-x64*' -o -name 'darwin-arm64*' \
+        -o -name 'win32*' -o -name 'msvc*' \
+        -o -name 'linux-musl*' -o -name 'linux-arm64*' -o -name 'linux-armhf*' \
+        \) -prune -exec rm -rf {} + 2>/dev/null || true
     # 非功能媒体（演示视频 / 引导动画）：不影响启动与 AI 能力（实测约 47MB）
     find "$BASE" \( -name '*.mp4' -o -name '*.mov' -o -name '*.webm' \
         -o -name '*.avi' -o -name '*.mkv' -o -name '*.gif' \) -delete 2>/dev/null || true
