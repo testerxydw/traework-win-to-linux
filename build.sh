@@ -553,6 +553,35 @@ fi
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
   gtk-update-icon-cache -f /usr/share/icons/hicolor || true
 fi
+
+# 兜底注册 URL scheme（x-scheme-handler/solo-cn）—— MCP 的 OAuth 回跳依赖它。
+# 应用启动时 Electron 也会自己注册（已通过 launcher 的 CHROME_DESKTOP 使之生效），
+# 但若系统缺 xdg-settings/xdg-mime，注册会失败；这里直接为各用户写 mimeapps.list（幂等）。
+HANDLER=trae-solo-cn-url-handler.desktop
+for home_dir in /root /home/*; do
+    [ -d "$home_dir" ] || continue
+    user_name="$(basename "$home_dir")"
+    cfg="$home_dir/.config"
+    mime="$cfg/mimeapps.list"
+    if [ -f "$mime" ] && grep -q "x-scheme-handler/solo-cn=" "$mime" 2>/dev/null; then
+        continue
+    fi
+    mkdir -p "$cfg" 2>/dev/null || continue
+    if [ ! -f "$mime" ]; then
+        printf '[Default Applications]\nx-scheme-handler/solo-cn=%s\n' "$HANDLER" > "$mime"
+    elif grep -q '^\[Default Applications\]' "$mime"; then
+        sed -i "/^\[Default Applications\]/a x-scheme-handler/solo-cn=$HANDLER" "$mime"
+    else
+        printf '\n[Default Applications]\nx-scheme-handler/solo-cn=%s\n' "$HANDLER" >> "$mime"
+    fi
+    if [ "$user_name" != "root" ] && id -u "$user_name" >/dev/null 2>&1; then
+        chown "$user_name:$(id -gn "$user_name" 2>/dev/null || echo "$user_name")" "$mime" 2>/dev/null || true
+        if [ "$(stat -c %U "$cfg" 2>/dev/null)" = "root" ]; then
+            chown "$user_name" "$cfg" 2>/dev/null || true
+        fi
+    fi
+    echo "已注册 URL scheme: x-scheme-handler/solo-cn -> $HANDLER ($user_name)"
+done
 POSTINST_EOF
         step "  已生成 DEBIAN/postinst"
     fi
@@ -625,6 +654,32 @@ DESKTOP_EOF
         step "  已生成 desktop 文件"
     fi
 
+    # URL scheme handler —— MCP 的 OAuth 回跳依赖（x-scheme-handler/solo-cn）：
+    #   product.json 的 `urlProtocol` = "solo-cn"，应用启动时会调 Electron 的
+    #   app.setAsDefaultProtocolClient("solo-cn")，其 Linux 实现要求存在名为
+    #   <desktop 名>-url-handler.desktop 且声明 MimeType=x-scheme-handler/solo-cn 的文件，
+    #   否则注册静默失败 → 浏览器回调 solo-cn://... 无人处理 → 登录/MCP 授权卡在浏览器。
+    #   命名与官方保持一致（code-url-handler.desktop / buddycn-url-handler.desktop /
+    #   trae-cn-url-handler.desktop）。
+    local URL_HANDLER="${PKG_DIR}/usr/share/applications/trae-solo-cn-url-handler.desktop"
+    if [[ ! -f "${URL_HANDLER}" ]]; then
+        cat > "${URL_HANDLER}" << 'URLH_EOF'
+[Desktop Entry]
+Name=TRAE SOLO CN - URL Handler
+Comment=AI-powered code editor (Linux port)
+GenericName=Code Editor
+Exec=/opt/trae-solo-cn/trae-solo-cn --open-url %U
+Icon=trae-solo-cn
+Type=Application
+NoDisplay=true
+StartupNotify=true
+Categories=Utility;TextEditor;Development;IDE;
+MimeType=x-scheme-handler/solo-cn;
+Keywords=solo-cn;
+URLH_EOF
+        step "  已生成 url-handler desktop（x-scheme-handler/solo-cn）"
+    fi
+
     # /usr/bin 命令软链（终端可直接执行 trae-solo-cn）
     if [[ ! -e "${PKG_DIR}/usr/bin/trae-solo-cn" ]]; then
         ln -sf /opt/trae-solo-cn/trae-solo-cn "${PKG_DIR}/usr/bin/trae-solo-cn"
@@ -686,6 +741,12 @@ stage_desktop() {
 
 APP_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 ELECTRON="$APP_DIR/trae-solo-cn-bin"
+
+# URL scheme 注册（MCP 的 OAuth 回跳需要）：
+#   Chromium/Electron 的 setAsDefaultProtocolClient 依赖 CHROME_DESKTOP 环境变量取到
+#   desktop 文件名；不设置时它在 Linux 上直接返回 false（静默不注册）。
+#   官方 VS Code 的 bin/code 里同样有这一行（code-url-handler.desktop）。
+export CHROME_DESKTOP=trae-solo-cn-url-handler.desktop
 
 # 提升文件描述符上限，避免 File Watcher 出现 EMFILE: too many open files
 ulimit -n 65535 2>/dev/null || true
