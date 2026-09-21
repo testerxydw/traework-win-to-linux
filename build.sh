@@ -752,14 +752,20 @@ export CHROME_DESKTOP=trae-solo-cn-url-handler.desktop
 ulimit -n 65535 2>/dev/null || true
 
 # 公共 Electron 参数：
-#   --disable-dev-shm-usage : DDE 下 /dev/shm 偏小，缺省会卡住渲染进程重绘，
-#                            表现为「work 模式 AI 流式输出不实时刷新、需切页才显示」。
 #   --title-bar-style=native: 强制使用系统（DDE）标题栏（双保险，main.js 补丁亦强制 native）。
 #   --disable-backgrounding-occluded-windows / --disable-renderer-backgrounding /
 #   --disable-background-timer-throttling : 禁用 DDE 下的窗口遮挡检测与后台节流，
 #                            避免渲染进程被误判为「被遮挡」而暂停重绘，导致 AI 流式输出
 #                            必须切页才刷新。
-EXTRA_ARGS="--disable-dev-shm-usage --title-bar-style=native --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling"
+EXTRA_ARGS="--title-bar-style=native --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling"
+
+# --disable-dev-shm-usage 改为按需追加：它让 Chromium 把共享内存从 /dev/shm 挪到 /tmp 文件，
+# 多一层文件开销；只有在 /dev/shm 偏小（容器 / 部分发行版默认 64M）时才有收益。
+# 桌面发行版（systemd 默认给内存的 50%）通常远大于 1G，此时不该传。
+SHM_MB="$(df -m /dev/shm 2>/dev/null | awk 'NR==2{print $2}')"
+if [ -n "$SHM_MB" ] && [ "$SHM_MB" -lt 1024 ]; then
+    EXTRA_ARGS="--disable-dev-shm-usage $EXTRA_ARGS"
+fi
 
 # chrome-sandbox 需要 root:setuid 才能启用 Chromium 沙箱。postinst 会设置；
 # 若目标系统以 nosuid 挂载或 dpkg 解压时未生效，则自动追加 --no-sandbox，
