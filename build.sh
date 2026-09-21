@@ -400,6 +400,19 @@ stage_slim() {
     local BASE="${PKG_DIR}/opt/trae-solo-cn"
     [[ -d "$BASE" ]] || die "未找到 ${BASE}，请先执行拆包阶段"
 
+    # 诊断探针：关键跨平台 Node 文件在 slim 前的存在性（用于定位误删来源）
+    # node_modules/which/node_modules/isexe/dist/{cjs,mjs}/win32.js 会被 index.js 动态 require，
+    # 一旦缺失 → 扩展宿主 MODULE_NOT_FOUND → exit 1 → 扩展与 MCP 全部不可用（2026-09-21 事故）
+    local _probe _rel
+    for _rel in node_modules/which/node_modules/isexe/dist/cjs/win32.js \
+                node_modules/which/node_modules/isexe/dist/mjs/win32.js; do
+        if [[ -f "${BASE}/resources/app/${_rel}" ]]; then
+            step "slim 前探针: ${_rel} 存在"
+        else
+            echo "  [诊断] slim 前已缺失: ${_rel}（问题在 assemble 而非 slim）"
+        fi
+    done
+
     local before after
     before="$(du -sm "$BASE" | cut -f1)"
 
@@ -458,6 +471,28 @@ stage_slim() {
     else
         echo "  [警告] 缺少 strip 命令（binutils），跳过符号剥离，体积优化减弱"
     fi
+
+    # ---------- 关键跨平台文件终检 / 补回（防御性，2026-09-21 事故）----------
+    # 背景：slim 早期用 `-path '*win32*'` 误删了跨平台 Node 代码（isexe 的 win32.js），
+    # 它被 dist/{cjs,mjs}/index.js 动态 require，缺失 → 扩展宿主 MODULE_NOT_FOUND → exit 1
+    # → 扩展与 MCP（GitHub/gitee/gitlab）全部不可用。规则已改 -type d，
+    # 这里再做一次终检，必要时从官方 Linux 运行时（/usr/share/trae-cn）补回。
+    local _orig=""
+    if [[ -d "${TRAECODE_INSTALLED:-}/resources/app" ]]; then
+        _orig="${TRAECODE_INSTALLED}/resources/app"
+    fi
+    for _rel in node_modules/which/node_modules/isexe/dist/cjs/win32.js \
+                node_modules/which/node_modules/isexe/dist/mjs/win32.js; do
+        if [[ -f "${BASE}/resources/app/${_rel}" ]]; then
+            step "slim 后探针: ${_rel} 保留 ✅"
+        elif [[ -n "$_orig" && -f "${_orig}/${_rel}" ]]; then
+            mkdir -p "$(dirname "${BASE}/resources/app/${_rel}")"
+            cp -a "${_orig}/${_rel}" "${BASE}/resources/app/${_rel}"
+            step "slim 校验: 已从官方运行时补回 ${_rel}"
+        else
+            echo "  [警告] ${_rel} 缺失且无补回源（扩展宿主可能启动失败）"
+        fi
+    done
 
     after="$(du -sm "$BASE" | cut -f1)"
     step "精简: ${before} MB -> ${after} MB (省 $((before-after)) MB)"
