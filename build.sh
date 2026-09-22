@@ -22,6 +22,7 @@
 #   bash build.sh --ll-only                      # 仅用现有最新 deb 构建玲珑 + 安装玲珑（不拆包/不构建 deb）
 #   bash build.sh --no-install                   # 全部构建但都不安装
 #   bash build.sh --install-deps                 # 一键安装构建所需的全部依赖工具后退出
+#   bash build.sh --limit-cpu 8                  # 改用前 8 核；默认限制 4 核，--limit-cpu 0 为不限制
 #
 # 依赖说明：
 #   基础工具 rsync/python3/dpkg-deb/sed/grep/md5sum 一般系统自带
@@ -130,7 +131,7 @@ install_deps() {
         [[ -d "${SCRIPT_DIR}/.innoextract-src" ]] || \
             git clone --depth 1 https://github.com/dscharrer/innoextract.git "${SCRIPT_DIR}/.innoextract-src"
         cmake -S "${SCRIPT_DIR}/.innoextract-src" -B "${SCRIPT_DIR}/.innoextract-src/build" >/dev/null
-        cmake --build "${SCRIPT_DIR}/.innoextract-src/build" -j"$(nproc)" >/dev/null
+        cmake --build "${SCRIPT_DIR}/.innoextract-src/build" -j"${JOBS:-$(nproc)}" >/dev/null
         [[ -x "${SCRIPT_DIR}/.innoextract-src/build/innoextract" ]] || die "innoextract 编译失败"
         step "innoextract 编译完成: $(${SCRIPT_DIR}/.innoextract-src/build/innoextract --version | head -n1)"
     fi
@@ -138,7 +139,38 @@ install_deps() {
     step "依赖安装完成，可重新执行构建命令"
 }
 
+# CPU 核数限制：>0 表示只钉在前 N 个逻辑核上（默认 4）；0 表示不限制
+LIMIT_CPU=4
+
+# ---------- CPU 核数限制（--limit-cpu N）----------
+# taskset 的 CPU 亲和会被子进程继承，因此一旦钉核，后续 innoextract/7z/strip/
+# dpkg-deb/md5sum/ll-builder 全链路都只能用这些核；避免打包时把桌面挤卡。
+# 实现：用 taskset 重新 exec 自身（TRAEBUILD_CPU_PINNED 防重复 exec），
+# 并把 JOBS 导出，供并行工具（cmake --build -j）取用。
+apply_cpu_limit() {
+    [[ "${LIMIT_CPU}" -gt 0 ]] || return 0
+    if [[ -n "${TRAEBUILD_CPU_PINNED:-}" ]]; then
+        step "CPU 限制已生效: $(taskset -cp "$$" 2>/dev/null | sed 's/.*: //')"
+        return 0
+    fi
+    [[ "${LIMIT_CPU}" =~ ^[0-9]+$ ]] || die "--limit-cpu 需要正整数，当前: ${LIMIT_CPU}"
+
+    local total="${LIMIT_CPU}"
+    command -v nproc >/dev/null 2>&1 && total="$(nproc)"
+    if [[ "${LIMIT_CPU}" -gt "${total}" ]]; then
+        echo "  [提示] --limit-cpu ${LIMIT_CPU} 超过可用核数 ${total}，按 ${total} 核限制"
+        LIMIT_CPU="${total}"
+    fi
+    command -v taskset >/dev/null 2>&1 || die "缺少 taskset（util-linux），无法限制 CPU 核数"
+
+    step "CPU 限制: 仅使用前 ${LIMIT_CPU}/${total} 个逻辑核（含全部子进程）"
+    export TRAEBUILD_CPU_PINNED=1
+    export JOBS="${LIMIT_CPU}"
+    exec taskset -c "0-$((LIMIT_CPU-1))" bash "$0" "${ORIG_ARGS[@]}"
+}
+
 # ---------- 参数解析 ----------
+ORIG_ARGS=("$@")
 WIN_EXE=""
 EXTRACTED_DIR=""
 DO_EXTRACT=1
@@ -159,11 +191,16 @@ while [[ $# -gt 0 ]]; do
         --ll-only)     DO_EXTRACT=0; DO_DEB=0; DO_LL=1; shift ;;
         --no-install)  DO_INSTALL=0; shift ;;
         --install-deps) RUN_INSTALL_DEPS=1; shift ;;
+        --limit-cpu)    [[ $# -ge 2 ]] || die "--limit-cpu 缺少参数（如 4 或 8）"; LIMIT_CPU="$2"; shift 2 ;;
+        --limit-cpu=*)  LIMIT_CPU="${1#*=}"; shift ;;
         -h|--help)     usage ;;
         *.exe)         WIN_EXE="$1"; shift ;;
         *) echo "未知参数: $1" >&2; usage ;;
     esac
 done
+
+# ---------- CPU 核数限制（需在依赖安装/构建之前生效，覆盖全链路子进程）----------
+apply_cpu_limit
 
 # ---------- 依赖安装模式（装完即退出，不需预先具备任何构建工具）----------
 if [[ "${RUN_INSTALL_DEPS}" -eq 1 ]]; then

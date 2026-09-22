@@ -53,7 +53,13 @@ bash build.sh --deb-only                        # 只到 deb（不转玲珑）
 bash build.sh --ll-only                         # 只用最新 deb 转玲珑
 bash build.sh --no-install                      # 全部构建但都不安装
 bash build.sh --install-deps                    # 一键装齐依赖（apt 包 + 自编译 innoextract）
+bash build.sh --limit-cpu 8                     # 改用前 8 核（默认限制 4 核）
+bash build.sh --limit-cpu 0                     # 取消限制，跑满所有核
 ```
+
+> 默认只用前 **4** 核打包：`--limit-cpu N` 通过 `taskset` 给整个脚本钉 CPU 亲和（子进程继承），
+> 解包 / strip / `dpkg-deb` 压缩 / 玲珑构建全链路都只在指定核上运行，
+> 打包时桌面不会因为 CPU 被打满而卡顿；`N` 超过物理核数时自动回落到实际核数，`N=0` 取消限制。
 
 新机器首次使用：先 `bash build.sh --install-deps` 自动安装 7zip、linglong 工具链、
 python3-yaml 等 apt 包，并 clone + 编译 innoextract ≥ 1.10（发行版仓库只有 1.9，
