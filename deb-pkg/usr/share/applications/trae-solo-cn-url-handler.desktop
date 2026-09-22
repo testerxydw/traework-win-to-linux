@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=TRAE SOLO CN - URL Handler
+Comment=AI-powered code editor (Linux port)
+GenericName=Code Editor
+Exec=/opt/trae-solo-cn/trae-solo-cn --open-url %U
+Icon=trae-solo-cn
+Type=Application
+NoDisplay=true
+StartupNotify=true
+Categories=Utility;TextEditor;Development;IDE;
+MimeType=x-scheme-handler/solo-cn;
+Keywords=solo-cn;
