@@ -318,7 +318,7 @@ stage_extract() {
     # 未来版本失效时降级为警告，不阻断构建。
     step "修补 main.js titleBarOverlay Linux 守卫 ..."
     python3 - "$RES_DIR/out/main.js" << 'PYEOF' || echo "  [警告] main.js 未命中已知模式，跳过（若 Linux 出现白块需人工适配）"
-import sys, re
+import os, sys, re
 p = sys.argv[1]
 s = open(p, encoding='utf-8').read()
 applied = []
@@ -358,10 +358,121 @@ c3 = 'switch(i){case"window.titleBarStyle":return"custom"}'
 if c3 in s:
     s = s.replace(c3, 'switch(i){case"window.titleBarStyle":return this.a.getValue("window.titleBarStyle",e,void 0)||"native"}', 1)
     applied.append('config.custom->native')
+
+# 4) toolhost 开关（TRAE_PATCH_ENABLE_TOOLHOST，默认 0 = 关闭）
+#    官方 ENABLE_TOOLHOST=(ke||Ae)&&Li(this.H) 在 Linux 上因 ke/Ae（Windows/macOS 绑定）
+#    恒判 "0" —— 即官方本来就不在 Linux 启用 toolhost。
+#    曾试过放开为 Li(this.H)?"1":"0" 强行启用，结果（0.1.69-3/-4/-5 实测）：
+#    agent-tool-host 进程虽被拉起（手动直跑能初始化并监听 :8999，二进制没问题），
+#    但 ai-agent 侧 ToolhostManager 的握手/注册不成立 → shell 工具全部报
+#    「ToolHost is not running for shell_execute_strategy=tool_host」，命令根本执行不了，
+#    且服务端把该错误写进会话，模型只会反复建议"重启 IDE"。
+#    故默认硬编码 "0"，回到官方 Linux 行为（ENABLE_TOOLHOST=0 时 shell 走 IDE 终端路径）。
+# 默认**不修改** ENABLE_TOOLHOST：保持上游原生 (ke||Ae)&&Li(this.H)?"1":"0"，
+# 在 Linux 上 ke/Ae（Windows/macOS 绑定）恒 false → 本来就是 "0"（不启用 toolhost）。
+# 只有 TRAE_PATCH_ENABLE_TOOLHOST=1 时才放开条件强行启用 —— 已实测无效（见上），勿开。
+if os.environ.get('TRAE_PATCH_ENABLE_TOOLHOST', '0') == '1':
+    s4, n4 = re.subn(
+        r'ENABLE_TOOLHOST:(?:\([^)]*\)&&)?([A-Za-z_$][\w$]*)\(this\.([A-Za-z_$][\w$]*)\)\?"1":"0"',
+        r'ENABLE_TOOLHOST:\1(this.\2)?"1":"0"',
+        s)
+    if n4:
+        s = s4
+        applied.append('toolhost-enable(x%d)' % n4)
+    else:
+        print("  [警告] main.js 未命中 toolhost ENABLE_TOOLHOST 模式")
+else:
+    applied.append('toolhost-untouched(上游原生)')
+
+# 5) 客户端形态声明（TRAE_PATCH_CLIENT_TYPE_IDE，默认 0 = 不修改）
+#    曾试验把注入 ai-agent 的 TRAE_STATIC_CLIENT_TYPE 由 Li(this.H)?"solo-lite":"ide"
+#    改成硬编码 "ide"，企图让 .so 走 IDE 形态的终端执行路径 —— 未拿到任何支持证据，
+#    而改产品形态声明风险大（影响 .so 对整体形态的判断），故默认关闭、保持上游原样。
+if os.environ.get('TRAE_PATCH_CLIENT_TYPE_IDE', '0') == '1':
+    if 'TRAE_STATIC_CLIENT_TYPE:"ide"' in s:
+        applied.append('static-client-type(ide 已设)')
+    else:
+        s6, n6 = re.subn(r'TRAE_STATIC_CLIENT_TYPE:[^,}]*?"solo-lite":"ide"', 'TRAE_STATIC_CLIENT_TYPE:"ide"', s)
+        if n6:
+            s = s6
+            applied.append('static-client-type->ide(x%d)' % n6)
+        else:
+            print("  [警告] main.js 未命中 TRAE_STATIC_CLIENT_TYPE 模式")
+else:
+    applied.append('static-client-type-untouched(上游原生)')
 if not applied:
     sys.exit(1)
 open(p, 'w').write(s)
 print("  main.js 已修补（命中: " + ", ".join(applied) + "）")
+PYEOF
+
+    # ---------- 修补 shell 执行策略：soloLite 不再上报 tool_host ----------
+    # 现象（2026-09-23 用户实测，0.1.69-3/-4）：work 模式下发命令后，服务端回
+    #   「ToolHost is not running for shell_execute_strategy=tool_host」→ 命令根本不在
+    #   本机执行，重试无效（模型自己都提示"重启 IDE"）。
+    # 原因：客户端在 soloLite（=本 repack 的固定形态，isSoloLiteMode=true）下硬编码上报
+    #   `tool_host` 策略：
+    #     pb(e){ if(this.G.isSoloLite) return <tool_host 变量>;
+    #            const t=this.H.shouldUseShellExecMode(e);
+    #            return t&&this.qb()?<tool_host>:t?<shell_exec>:"" }
+    #   而本机 toolhost 进程（modules/ai-agent/bin/agent-tool-host，手动直跑能正常
+    #   初始化并监听 :8999）经 ai-agent 侧判定为 "not running"，即 .so 与 toolhost 之间的
+    #   握手/注册在 Linux repack 下不成立 —— 属闭源协议层，包内无法直接修。
+    #   shell_exec 是传统 IDE 终端路径（VS Code 原生，Linux 必然可用；本项目 09-22 实测
+    #   runCommandInTerminal end [{"code":"0"}] 成功）。
+    # 修法（最小改动）：只把 soloLite 短路分支的返回值由 tool_host 换成 shell_exec，其余逻辑不动。
+    # 变量名随版本变化（0.1.69: 完整版 L0n/K2i、slim BGi/lRt），故用「同文件内
+    #   <x>="tool_host" / <y>="shell_exec"」动态探测。
+    # 实测记录（2026-09-23）：
+    #   - 10:57 会话 ✅ 生效：work 模式 `runCommandInTerminal end, cost=38ms [{"code":"0"}]`
+    #     （ShellExec mode queried: useShellExec=true, isSoloLite=true, isSoloMode=true）
+    #   - 10:58 会话 ❌ 同补丁下服务端仍偶发按 tool_host 路由（AI 回复 ToolHost is not running，
+    #     客户端一个命令调用都没收到）→ 该字段的服务端采纳行为不稳定。
+    #   - 曾加过「tool_host 全降级 + logService 诊断」，无额外收益且刷日志（单会话 4600+ 条），已回退。
+    # 开关：TRAE_PATCH_SHELL_STRATEGY=0 可关闭（默认 1）。
+    step "修补 shell 执行策略（soloLite -> shell_exec，规避 ToolHost 不可用）..."
+    python3 - "$RES_DIR/out/vs/workbench" << 'PYEOF' || echo "  [警告] shell 策略补丁未完全命中（版本可能已变化），跳过"
+import glob, os, re, sys
+
+if os.environ.get('TRAE_PATCH_SHELL_STRATEGY', '1') == '0':
+    print('  [跳过] TRAE_PATCH_SHELL_STRATEGY=0')
+    sys.exit(0)
+
+targets = sorted(glob.glob(os.path.join(sys.argv[1], 'workbench.desktop.main.solo-lite*.js')))
+if not targets:
+    print('  [警告] 未找到 workbench.desktop.main.solo-lite*.js')
+    sys.exit(1)
+
+patched, missed = 0, []
+for p in targets:
+    with open(p, encoding='utf-8', errors='surrogateescape', newline='') as fh:
+        src = fh.read()
+    m_tool = re.search(r'([A-Za-z_$][\w$]*)="tool_host"', src)
+    m_shell = re.search(r'([A-Za-z_$][\w$]*)="shell_exec"', src)
+    if not (m_tool and m_shell):
+        missed.append(os.path.basename(p) + '(策略常量未找到)')
+        continue
+    tool, shell = m_tool.group(1), m_shell.group(1)
+    # 原形态：pb(e){if(this.G.isSoloLite)return <tool_host>;const t=this.H.shouldUseShellExecMode(e);
+    #                return t&&this.qb()?<tool_host>:t?<shell_exec>:""}
+    pat = r'(if\(this\.G\.isSoloLite\)return )%s(;)' % re.escape(tool)
+    s, n = re.subn(pat, lambda m: m.group(1) + shell + m.group(2), src, count=1)
+    if n == 0:
+        if re.search(r'if\(this\.G\.isSoloLite\)return %s;' % re.escape(shell), src):
+            print('  无需修补：%s 已是 shell_exec 策略' % os.path.basename(p))
+            continue
+        missed.append(os.path.basename(p) + '(isSoloLite 分支未命中)')
+        continue
+    with open(p, 'w', encoding='utf-8', errors='surrogateescape', newline='') as fh:
+        fh.write(s)
+    patched += 1
+    print('  已修补 %s: isSoloLite 上报 %s（原 %s）' % (os.path.basename(p), shell, tool))
+
+if patched == 0 and not missed:
+    print('  无需修补：shell 执行策略已是 shell_exec')
+if missed:
+    print('  [警告] 未处理: ' + ', '.join(missed))
+    sys.exit(1)
 PYEOF
 
     # product.json：复制后修改 buildPlatform 为 linux，并注入原生标题栏默认值
@@ -384,6 +495,168 @@ PYEOF
         "$RES_DIR/node_modules/@byted-icube/solo-lite/"
     rsync -a "$TWAPP/node_modules/@byted-solo/" \
         "$RES_DIR/node_modules/@byted-solo/" 2>/dev/null || true
+
+    # ---------- 修复 0.1.69 流订阅回归：畸形 chat.subscribe 包不再中断流 ----------
+    # 现象（2026-09-23 用户实测，0.1.69-3）：work 模式发消息后 UI 立刻报
+    #   「服务器错误，请稍后重试。(-1)」+「异常打断」，而服务端任务其实仍在后台跑；
+    #   切到 code 再切回 work 才看到「已执行 N 条命令」。
+    # 日志链（logs/20260923T093408/window1/renderer.log）：
+    #   [API client][rust] onMessage: no event field in chat.subscribe
+    #   → [StreamDomainService] stream error: ... Malformed chat subscription packet: missing event
+    #   → Scheduling automatic retry {... "errorCode":-1}
+    #   → resumeMessage 995000 Chat turn not found for response message temp-agent-...
+    #   → Automatic retry failed to start（前端「异常打断」）
+    # 根因：0.1.67 对「无 event 字段的包」是「只告警、忽略」
+    #   （`if(!o?.event)return void e._logService.warn(...)`），
+    #   而 0.1.69 改成对 chat.subscribe 致命报错：
+    #   `if(!o?.event){warn(...),f&&v(new U("Malformed chat subscription packet: missing event",-1));return}`
+    #   （f = service==="chat" && method==="subscribe"）。服务端仍会下发这种包
+    #   → 每次流都被判定畸形而中断，必然触发上述报错。
+    # 修法：删除该致命分支，恢复 0.1.67 的容忍行为（同会话日志可见畸形包之后
+    #   session_updated 事件仍持续到达，忽略它不影响后续事件流）。
+    # 开关：TRAE_PATCH_SUBSCRIBE_FIX=0 可关闭（默认 1）。
+    step "修补 solo-lite 畸形订阅包处理（0.1.69 回归）..."
+    python3 - "$RES_DIR/node_modules/@byted-icube/solo-lite/dist" << 'PYEOF' || echo "  [警告] solo-lite 畸形包致命分支未命中（版本可能已变化），跳过"
+import glob, os, re, sys
+
+if os.environ.get('TRAE_PATCH_SUBSCRIBE_FIX', '1') == '0':
+    print('  [跳过] TRAE_PATCH_SUBSCRIBE_FIX=0')
+    sys.exit(0)
+
+base = sys.argv[1]
+msg = 'Malformed chat subscription packet: missing event'
+# 目标形态：逗号表达式尾部 `...,f&&v(new U("<msg>",-1));`
+literal = ',f&&v(new U("%s",-1));' % msg
+# 兜底正则：minify 变量名随版本变化（f/v/U 可能被重命名）
+pattern = r',[A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*\(new [A-Za-z_$][\w$]*\("%s",-1\)\);' % re.escape(msg)
+
+targets = [p for p in sorted(glob.glob(os.path.join(base, '551.*.mjs')))
+           if '.orig' not in p and '.bak' not in p]
+if not targets:
+    print('  [警告] 未找到 solo-lite 551.*.mjs')
+    sys.exit(1)
+
+patched = 0
+for p in targets:
+    # newline='' + surrogateescape：二进制安全读写，避免文本模式把 CRLF 归一化
+    # （2026-09-21 曾因此丢掉 551.mjs 内嵌 CSS 的 293 个 CR）
+    with open(p, encoding='utf-8', errors='surrogateescape', newline='') as fh:
+        src = fh.read()
+    if msg not in src:
+        continue
+    s = src.replace(literal, ';', 1)
+    if s == src:
+        s = re.sub(pattern, ';', src, count=1)
+    if s != src:
+        with open(p, 'w', encoding='utf-8', errors='surrogateescape', newline='') as fh:
+            fh.write(s)
+        patched += 1
+        print('  已修补 %s: 畸形 chat.subscribe 包不再中断流（恢复容忍行为）' % os.path.basename(p))
+
+if patched == 0:
+    # 重复构建（deb-pkg 已含补丁）视为正常；仍有致命分支才告警
+    left = []
+    for p in targets:
+        with open(p, encoding='utf-8', errors='surrogateescape', newline='') as fh:
+            if msg in fh.read():
+                left.append(os.path.basename(p))
+    if left:
+        print('  [警告] 致命分支仍在（正则未命中，版本可能已变化）: %s' % ', '.join(left))
+        sys.exit(1)
+    print('  无需修补：solo-lite 已是容忍行为')
+PYEOF
+
+    # ---------- 修复"频繁触发系统通知"：完成通知按会话去重 ----------
+    # 现象（2026-09-23 用户实测 + 日志取证）：
+    #   `[NotificationPort] Stream started → Stream stopped (stopType:"complete")` 每 1~2 秒一轮
+    #   （logs/20260923T101745 十八秒内 24 轮）→ 每轮 Complete 都弹一次"任务完成"系统通知 → 刷屏。
+    # 驱动链：服务端/本地通道高频推 `session_updated`（每 50~100ms）→ 客户端
+    #   `[stream-diagnostics][realtime] trigger active session re-init` 反复重建订阅 → 反复 start/stop。
+    # 弹通知的地方有两处，且**存在两份 bundle 副本**（2026-09-23 二次排查发现，首版只改了后者导致无效）：
+    #   - 运行时实际加载的是 solo-lite/dist/551.*.mjs（work 模式的 chat-core —— 订阅补丁也只在它上面生效证明这点）
+    #   - ai-modules-chat/dist/index.mjs 是另一份副本（IDE 侧用），两份都要打，漏一个就会继续弹
+    #   ① NotificationPort.handleStreamStopped → case Complete → handleComplete → showNotification(success)
+    #   ② SessionService.onStreamingStop → case Complete → _agentNotificationService.showNotification(...)
+    #     （② 只在 ai-modules-chat/index.mjs 中存在；551 里只有 ①）
+    # 本补丁只做"同会话 60 秒内只弹一次 Complete"的去重（治标；治本需改高频 re-init，风险更大）。
+    # 两处插入点**共享同一个全局窗口**（globalThis.__TRAE_NTF_SEEN）—— 否则同一轮 start/stop 会被
+    #   两个类各弹一条，等于没压住。
+    # 只压 Complete，不压 Error（错误提示保留，避免漏报）。
+    # 开关：TRAE_PATCH_NOTIFY_DEDUP=0 关闭（默认 1）。
+    step "修补完成通知去重（同会话 60s 一条）..."
+    python3 - "$RES_DIR/node_modules/@byted-icube/solo-lite/dist" \
+             "$RES_DIR/node_modules/@byted-icube/ai-modules-chat/dist" << 'PYEOF' || echo "  [警告] 通知去重未命中插入点（版本可能已变化），跳过"
+import glob, os, re, sys
+
+if os.environ.get('TRAE_PATCH_NOTIFY_DEDUP', '1') == '0':
+    print('  [跳过] TRAE_PATCH_NOTIFY_DEDUP=0')
+    sys.exit(0)
+
+def port_patch(src):
+    """在 NotificationPort.handleStreamStopped 的 switch 前插入去重守卫（变量名动态探测）。"""
+    sig = re.search(
+        r'async handleStreamStopped\(([\w$]+)\)\{let\{sessionId:([\w$]+),agentMessageId:[\w$]+,stopType:([\w$]+),error:[\w$]+\}=\1;',
+        src)
+    if not sig:
+        return None
+    sid, sv = sig.group(2), sig.group(3)
+    # 枚举命名空间可能是 $ 开头（index.mjs 用 $.Bs，551 用 z.Bs）→ 必须用 [\w$]+ 而非 \w+
+    sw = re.search(r'switch\(%s\)\{case ([\w$]+)\.Bs\.Error:await this\.handleError\(' % re.escape(sv), src)
+    if not sw:
+        return None
+    ns = sw.group(1)
+    log = re.search(r'(\w+)\.logger\.info\("\[NotificationPort\] Stream stopped, cleaning up:"', src)
+    logv = log.group(1) if log else ''
+    guard = ('if(%s===%s.Bs.Complete){const __g=globalThis.__TRAE_NTF_SEEN=globalThis.__TRAE_NTF_SEEN||new Map(),'
+             '__nt=Date.now();if(__nt-(__g.get(%s)||0)<60000){%s;return}__g.set(%s,__nt)}') % (
+        sv, ns, sid,
+        ('%s.logger.info("[NOTIFY-DEDUP] suppressed duplicate complete:",{sessionId:%s})' % (logv, sid))
+        if logv else 'void 0',
+        sid)
+    return ('switch(%s){case %s.Bs.Error:await this.handleError(' % (sv, ns),
+            guard + 'switch(%s){case %s.Bs.Error:await this.handleError(' % (sv, ns))
+
+SESSION_OLD = 'case eE.$t.Complete:{let e=i.messages[i.messages.length-1],r=e?.agentType;'
+SESSION_NEW = ('case eE.$t.Complete:{const __g=globalThis.__TRAE_NTF_SEEN=globalThis.__TRAE_NTF_SEEN||new Map(),'
+               '__nt=Date.now();if(__nt-(__g.get(t)||0)<60000){this._logService.info('
+               '"[NOTIFY-DEDUP] suppressed duplicate complete:",t);return}__g.set(t,__nt);')
+
+# 目标：solo-lite/dist/551.*.mjs（work 模式运行时那份）+ ai-modules-chat/dist/index.mjs（IDE 侧副本）
+targets = [p for p in sorted(glob.glob(os.path.join(sys.argv[1], '551.*.mjs')))
+           if '.orig' not in p and '.bak' not in p]
+targets.append(os.path.join(sys.argv[2], 'index.mjs'))
+
+patched, skipped = 0, 0
+for p in targets:
+    if not os.path.isfile(p):
+        continue
+    # newline='' + surrogateescape：二进制安全读写（避免 CRLF 归一化，同 551 订阅补丁）
+    with open(p, encoding='utf-8', errors='surrogateescape', newline='') as fh:
+        src = fh.read()
+    if '[NOTIFY-DEDUP]' in src:
+        print('  无需修补：%s 已是去重形态' % os.path.basename(p))
+        skipped += 1
+        continue
+    s, hits = src, []
+    g = port_patch(src)
+    if g and g[0] in s:
+        s = s.replace(g[0], g[1], 1)
+        hits.append('NotificationPort')
+    if SESSION_OLD in s:
+        s = s.replace(SESSION_OLD, SESSION_NEW + 'let e=i.messages[i.messages.length-1],r=e?.agentType;', 1)
+        hits.append('SessionService')
+    if not hits:
+        print('  [警告] %s 未命中通知去重插入点' % os.path.basename(p))
+        continue
+    with open(p, 'w', encoding='utf-8', errors='surrogateescape', newline='') as fh:
+        fh.write(s)
+    patched += 1
+    print('  已修补 %s：%s（完成通知按会话 60s 去重）' % (os.path.basename(p), ' + '.join(hits)))
+
+if patched == 0 and skipped == 0:
+    print('  [警告] 通知去重未命中任何文件')
+    sys.exit(1)
+PYEOF
 
     # ---------- 关键：应用身份 manifest.json ----------
     # 位于应用根目录（与 TraeCode 的 /usr/share/trae-cn/manifest.json 同级）。

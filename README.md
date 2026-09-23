@@ -77,6 +77,24 @@ python3-yaml 等 apt 包，并 clone + 编译 innoextract ≥ 1.10（发行版�
 启动：桌面菜单 `TRAE SOLO CN`（deb）/ `TRAE SOLO CN (玲珑版)`，或 `/opt/trae-solo-cn/trae-solo-cn`。
 
 
+## 内置补丁（拆包时自动应用，均可用环境变量关闭）
+
+`build.sh` 在组装 `deb-pkg` 时就地修补 0.1.69 的几个行为问题，每项都能用 `TRAE_PATCH_*=0` 关掉：
+
+| 环境变量 | 默认 | 作用 |
+|----------|------|------|
+| `TRAE_PATCH_SUBSCRIBE_FIX` | 1 | 畸形 `chat.subscribe` 包不再被当成致命错误（恢复 0.1.67 的「只告警忽略」），避免「服务器错误，请稍后重试。(-1)」+「异常打断」 |
+| `TRAE_PATCH_SHELL_STRATEGY` | 1 | soloLite 形态上报 `shell_exec` 而不是 `tool_host`，规避 Linux 上不可用的 ToolHost 链路（`ToolHost is not running for shell_execute_strategy=tool_host`） |
+| `TRAE_PATCH_NOTIFY_DEDUP` | 1 | 「任务完成」系统通知按会话 60 秒去重（服务端高频重建流时否则会反复弹通知） |
+| `TRAE_PATCH_ENABLE_TOOLHOST` | 0 | 是否强行启用 toolhost。默认保持上游 Linux 行为（不启用）；实测强行启用无效 |
+| `TRAE_PATCH_CLIENT_TYPE_IDE` | 0 | 是否把注入 ai-agent 的形态声明改成 `ide`。默认不改（无证据支持且风险大） |
+
+用法示例：`TRAE_PATCH_NOTIFY_DEDUP=0 bash build.sh --skip-extract --no-install`
+
+> 说明：这些补丁只改 `deb-pkg` 内的 JS bundle（`solo-lite/dist/551.*.mjs`、`ai-modules-chat/dist/index.mjs`、
+> `out/main.js`、`out/vs/workbench/workbench.desktop.main.solo-lite*.js`），不碰 Electron 二进制与 .so；
+> 每次完整构建都会重新应用，重复执行幂等。改动 `.mjs` 后必须清 `CachedData`/`Code Cache`/`GPUCache` 再启动，否则仍走旧字节码缓存。
+
 ## 玲珑包说明（如意玲珑 / uab）
 
 `build.sh` 的玲珑阶段自动完成：ll-pica 转换 → 适配修复（应用主体复制、

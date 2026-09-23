@@ -9,6 +9,35 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
   gtk-update-icon-cache -f /usr/share/icons/hicolor || true
 fi
 
+# 兜底注册 URL scheme（x-scheme-handler/solo-cn）—— MCP 的 OAuth 回跳依赖它。
+# 应用启动时 Electron 也会自己注册（已通过 launcher 的 CHROME_DESKTOP 使之生效），
+# 但若系统缺 xdg-settings/xdg-mime，注册会失败；这里直接为各用户写 mimeapps.list（幂等）。
+HANDLER=trae-solo-cn-url-handler.desktop
+for home_dir in /root /home/*; do
+    [ -d "$home_dir" ] || continue
+    user_name="$(basename "$home_dir")"
+    cfg="$home_dir/.config"
+    mime="$cfg/mimeapps.list"
+    if [ -f "$mime" ] && grep -q "x-scheme-handler/solo-cn=" "$mime" 2>/dev/null; then
+        continue
+    fi
+    mkdir -p "$cfg" 2>/dev/null || continue
+    if [ ! -f "$mime" ]; then
+        printf '[Default Applications]\nx-scheme-handler/solo-cn=%s\n' "$HANDLER" > "$mime"
+    elif grep -q '^\[Default Applications\]' "$mime"; then
+        sed -i "/^\[Default Applications\]/a x-scheme-handler/solo-cn=$HANDLER" "$mime"
+    else
+        printf '\n[Default Applications]\nx-scheme-handler/solo-cn=%s\n' "$HANDLER" >> "$mime"
+    fi
+    if [ "$user_name" != "root" ] && id -u "$user_name" >/dev/null 2>&1; then
+        chown "$user_name:$(id -gn "$user_name" 2>/dev/null || echo "$user_name")" "$mime" 2>/dev/null || true
+        if [ "$(stat -c %U "$cfg" 2>/dev/null)" = "root" ]; then
+            chown "$user_name" "$cfg" 2>/dev/null || true
+        fi
+    fi
+    echo "已注册 URL scheme: x-scheme-handler/solo-cn -> $HANDLER ($user_name)"
+done
+
 # ---- BEGIN desktop-shortcut ----
 # 强制为各用户创建桌面快捷方式（兼容 ~/Desktop 与中文 ~/桌面）
 SRC_DESKTOP=/usr/share/applications/trae-solo-cn.desktop
