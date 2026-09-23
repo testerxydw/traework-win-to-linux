@@ -53,13 +53,22 @@ bash build.sh --deb-only                        # 只到 deb（不转玲珑）
 bash build.sh --ll-only                         # 只用最新 deb 转玲珑
 bash build.sh --no-install                      # 全部构建但都不安装
 bash build.sh --install-deps                    # 一键装齐依赖（apt 包 + 自编译 innoextract）
-bash build.sh --limit-cpu 8                     # 改用前 8 核（默认限制 4 核）
+bash build.sh --limit-cpu 4                     # 收紧到前 4 核（deb 压缩会慢一倍多）
 bash build.sh --limit-cpu 0                     # 取消限制，跑满所有核
 ```
 
-> 默认只用前 **4** 核打包：`--limit-cpu N` 通过 `taskset` 给整个脚本钉 CPU 亲和（子进程继承），
+> 默认只用前 **8** 核打包：`--limit-cpu N` 通过 `taskset` 给整个脚本钉 CPU 亲和（子进程继承），
 > 解包 / strip / `dpkg-deb` 压缩 / 玲珑构建全链路都只在指定核上运行，
 > 打包时桌面不会因为 CPU 被打满而卡顿；`N` 超过物理核数时自动回落到实际核数，`N=0` 取消限制。
+>
+> 为什么默认 8：只有 `dpkg-deb` 的压缩真正吃多核，其余阶段（rsync / cp / innoextract / 7z /
+> strip / md5sum）基本单线程。本机 16 核、`deb-pkg` 1.3G 的实测：
+>
+> | 限制 | `dpkg-deb --build` 耗时 |
+> |------|------------------------|
+> | 4 核 | 7m10s（明显变慢） |
+> | 8 核 | 2m50s |
+> | 16 核（不限） | 2m47s（与 8 核基本持平） |
 
 新机器首次使用：先 `bash build.sh --install-deps` 自动安装 7zip、linglong 工具链、
 python3-yaml 等 apt 包，并 clone + 编译 innoextract ≥ 1.10（发行版仓库只有 1.9，

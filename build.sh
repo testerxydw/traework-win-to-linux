@@ -22,7 +22,8 @@
 #   bash build.sh --ll-only                      # 仅用现有最新 deb 构建玲珑 + 安装玲珑（不拆包/不构建 deb）
 #   bash build.sh --no-install                   # 全部构建但都不安装
 #   bash build.sh --install-deps                 # 一键安装构建所需的全部依赖工具后退出
-#   bash build.sh --limit-cpu 8                  # 改用前 8 核；默认限制 4 核，--limit-cpu 0 为不限制
+#   bash build.sh --limit-cpu 4                  # 改用前 4 核（deb 压缩会慢一倍多）；默认限制 8 核
+#   bash build.sh --limit-cpu 0                  # 取消限制，跑满所有核
 #
 # 依赖说明：
 #   基础工具 rsync/python3/dpkg-deb/sed/grep/md5sum 一般系统自带
@@ -139,8 +140,11 @@ install_deps() {
     step "依赖安装完成，可重新执行构建命令"
 }
 
-# CPU 核数限制：>0 表示只钉在前 N 个逻辑核上（默认 4）；0 表示不限制
-LIMIT_CPU=4
+# CPU 核数限制：>0 表示只钉在前 N 个逻辑核上（默认 8）；0 表示不限制
+# 之所以默认 8 而非跑满：dpkg-deb 的压缩是唯一真正吃多核的阶段（本机 16 核实测
+# 16 核 2m47s / 8 核 2m50s / 4 核 7m10s），限 4 核会把这步拖慢 2.5 倍；而其余阶段
+# （rsync/cp/innoextract/7z/strip/md5sum）基本单线程，给再多核也没收益。
+LIMIT_CPU=8
 
 # ---------- CPU 核数限制（--limit-cpu N）----------
 # taskset 的 CPU 亲和会被子进程继承，因此一旦钉核，后续 innoextract/7z/strip/
